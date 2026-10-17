@@ -1,8 +1,8 @@
-# NPC State Delta v1.2.1
+# NPC State Delta v1.2.2
 
 A SillyTavern extension that keeps a living dossier for every NPC in your roleplay: who they are, how they look, how they talk and behave, what they remember, and how they feel about you. After each reply it scans the story, updates the dossiers carefully, and feeds the present NPCs back to the roleplay model so they stay in character.
 
-**Current release:** 1.2.1 · [Changelog](CHANGELOG.md) · [Development guide](DEVELOPMENT.md)
+**Current release:** 1.2.2 · [Changelog](CHANGELOG.md) · [Development guide](DEVELOPMENT.md)
 
 ---
 
@@ -42,7 +42,7 @@ A SillyTavern extension that keeps a living dossier for every NPC in your rolepl
 ## Install and update
 
 1. In SillyTavern, open **Extensions → Install extension** and paste this repository's URL.
-   Or unpack `npc_state_delta-1.2.1.zip` so that a single `npc_state_delta` folder contains `manifest.json` directly.
+   Or unpack `npc_state_delta-1.2.2.zip` so that a single `npc_state_delta` folder contains `manifest.json` directly.
 2. Reload SillyTavern.
 3. **Before updating an existing install,** export a backup from **Data & maintenance → Backup / Export**.
 
@@ -79,6 +79,8 @@ With [Story Block](https://github.com/kohz87/Story_block) installed, Delta adds 
 - **👥 Present NPCs:** the same cards as in the chat, for whoever is present in the latest scene.
 - **📇 Dossiers:** every dossier with a search box. The dead stay out of the list until you search for them. Tap a row to open that dossier.
 
+Each present NPC's card carries a *now* line: mood · condition · outfit, from Story Block's World State for the latest reply while Story Block keeps the scene (Source of truth → Scene), otherwise from the dossier. With Story Block's **NPC Inner Chatter** block on, each line of chatter appears as a bubble beside the speaker's card, in the chatter's order: speech bubbles when two or more NPCs whisper, a thought bubble when only one has a line. On wide screens the bubble sits beside the card, on phones under it; lines from someone without a card go to a small *Others* line under the cards. Story Block then hides its own Chatter tab (the block is still written as before). All of this is display only.
+
 While Story Block is installed, the cast shows only in Story Block until you pick a choice under **Roster & continuity → Present NPCs in chat**. Pick **Full cards** or **Compact strip** to keep it in the chat as well; **Only in Story Block** shows full cards in the chat when Story Block isn't installed. The tabs are display only and change nothing in prompts, scans or saved data. Without Story Block nothing changes.
 
 ### Story Suite: Story Block, Story Director and RPG Battle
@@ -90,6 +92,10 @@ Delta works alone and alongside [Story Block](https://github.com/kohz87/Story_bl
 - **Calendar:** with Story Director installed, Delta uses its months and era for birthdays and ages, and keeps its own calendar if Story Director's is missing.
 - **Game stats:** with RPG Battle installed, **Custom fields** warns when a field name looks like a game stat (Level, HP, Class…) that RPG Battle keeps.
 - Delta also reads the World State inside Story Block's hidden block, as it reads Megumin Suite's.
+- **Shared with the others (read-only):** the current chat's NPCs (`npcs()`) and NPC profiles (`npcProfiles()`: name, aliases, present, a short role and a summary of up to 200 characters built from the dossier), which RPG Battle can offer as companions, and `openDossier(id)`, which opens Delta's dossier view on that NPC (an exact name or alias also works; archived NPCs open nothing) for RPG Battle's **Dossier** button. Archived and dead NPCs are left out of the profiles; nothing extra is scanned or sent to the model.
+- **Tokens per reply:** the Story Suite overlay shows Delta's estimate (about four characters a token) of what it adds to the next ordinary reply: the dossier injection by section (instructions, present NPC cards, mentioned and deceased references, relationship rubric) and, with one-pass capture on, its instruction plus the block the model writes back. Scans are separate requests and are not counted.
+- **Chatter on the cards:** Delta tells Story Block it shows NPC Inner Chatter on its Present NPCs cards, so Story Block hides its own Chatter tab while Delta is on.
+- **One look:** Delta's settings panel is the shared Story Suite look (`suite.css`, loaded once for all four extensions).
 
 **Source of truth** in the settings lets you choose per area: **Automatic** (the order above), **This extension** or **The other one**. Alone, every choice behaves like Automatic and Delta works exactly as before.
 
@@ -244,12 +250,12 @@ npm test                        # unit, compatibility and synthetic-host tests
 npm run validate                # inventory, isolation, version and ownership checks
 npm run measure:prompts         # prompt size measurements
 node scripts/measure-stage9.mjs # prompt/request budget baseline
-npm run package                 # builds dist/npc_state_delta-1.2.1.zip and its SHA-256
+npm run package                 # builds dist/npc_state_delta-1.2.2.zip and its SHA-256
 git diff --check
 ```
 
 - `runtime-modules.json` is the single inventory of shipped modules. The package contains only the runtime modules, stylesheet, manifest, inventory, license and README.
-- Application version 1.2.1 is independent of the unchanged storage and bundle formats. Branch lineage remains v5, with guarded v4 compatibility.
+- Application version 1.2.2 is independent of the unchanged storage and bundle formats. Branch lineage remains v5, with guarded v4 compatibility.
 - Behaviour is governed by [AGENTS.md](AGENTS.md), [the core contract](docs/core-contract.md) and [the workplan](docs/WORKPLAN.md). Development commands, evidence and limits are in [DEVELOPMENT.md](DEVELOPMENT.md).
 - Historical reviews: [1.0.28](docs/v1.0.28-review.md), [1.0.27 prefix cache](docs/v1.0.27-review.md), [Stage 9](docs/stage9-review.md). Seed provenance is in `docs/seed-provenance.*`.
 

@@ -9,16 +9,27 @@ import {
     SUITE_ID,
     announceNpcStateDelta,
     areaOwner,
+    NARRATION_CAPTURE_OUTPUT_ESTIMATE_CHARS,
+    NPC_PROFILE_ROLE_MAX,
+    NPC_PROFILE_SUMMARY_MAX,
+    SUITE_SHOWS,
+    copyTokenEstimate,
+    injectionSections,
+    replyTokenEstimate,
     buildManageApi,
+    buildNpcProfile,
+    buildNpcProfiles,
     defersArea,
     externalCalendar,
     normalizeSourceOfTruth,
     openSuiteOverlay,
     statLikeFieldNames,
     statsOverlapWarning,
+    resolveDossierTarget,
     suiteManageAvailable,
+    trimAtWord,
 } from '../suite-handshake.js';
-import { buildInjection, getActiveCalendarConfig, setActiveCalendarConfig, setExternalCalendarSource, stripUiNoise } from '../core.js';
+import { buildInjection, getActiveCalendarConfig, normalizeNpcRecord, setNpcArchived, setActiveCalendarConfig, setExternalCalendarSource, stripUiNoise } from '../core.js';
 import { deterministicCalendarBirthday } from '../calendar.js';
 
 // Story Suite handshake (docs/STORY_SUITE.md): the shared registry in suite.js, Delta's
@@ -601,10 +612,341 @@ test('v1.2.1 the runtime shares its panel and api.manage, and shows Manage all i
 test('v1.2.1 the settings panel starts with a hidden Manage all in Story Suite line', () => {
     const index = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8');
     const html = index.slice(index.indexOf('function buildSettingsHtml()'), index.indexOf('function readOpenSettingsGroups()'));
-    assert.match(html, /<div id="\$\{UI_ID\}" class="extension_container[\s\S]*npc-state-delta-drawer">\s*<div id="npc_state_delta_suite_manage" class="npc-state-delta-suite-manage" data-story-suite-link hidden>\s*<button type="button" class="menu_button" data-delta-open-suite>[^<]*<i [^>]*><\/i> Manage all in Story Suite<\/button>\s*<\/div>\s*<div class="delta-settings-quickbar">/);
+    assert.match(html, /<div id="\$\{UI_ID\}" class="extension_container[\s\S]*npc-state-delta-drawer story-suite-panel">\s*<div id="npc_state_delta_suite_manage" class="npc-state-delta-suite-manage story-suite-manage" data-story-suite-link hidden>\s*<button type="button" class="menu_button" data-delta-open-suite>[^<]*<i class="fa-solid fa-layer-group"><\/i> Manage all in Story Suite<\/button>\s*<\/div>\s*<div class="delta-settings-quickbar story-suite-quickbar">/);
     assert.match(index, /const UI_ID = 'npc_state_delta_settings';/);
     assert.equal((html.match(/data-story-suite-link/g) || []).length, 1, 'the line carries data-story-suite-link so the overlay can hide it while the panel is inside');
     assert.match(html, /<div [^>]*data-story-suite-link[^>]*>\s*<button [^>]*data-delta-open-suite>/, 'on the element that holds the link');
     const css = fs.readFileSync(new URL('../style.css', import.meta.url), 'utf8');
     assert.match(css, /\.npc-state-delta-suite-manage\[hidden\] \{ display: none; \}/);
+});
+
+test('v1.2.2 trimAtWord keeps whole words and ends a shortened text in an ellipsis', () => {
+    assert.equal(trimAtWord('  short   text ', 200), 'short text');
+    assert.equal(trimAtWord('aaaa bbbb cccc', 10), 'aaaa bbbb…');
+    assert.equal(trimAtWord('aaaa bbbb cccc', 12), 'aaaa bbbb…');
+    assert.equal(trimAtWord('aaaa bbbb; cccc', 12), 'aaaa bbbb…', 'no dangling separator before the ellipsis');
+    assert.equal(trimAtWord('unbrokenwordthatislong', 8), 'unbroke…', 'one long word is cut inside, still within the cap');
+    assert.equal(trimAtWord(null, 10), '');
+    assert.equal(trimAtWord({ toString: () => 'x' }, 10), '');
+});
+
+test('v1.2.2 npc profiles: tracked, non-archived NPCs with a short role and a <= 200-char summary', () => {
+    const lyra = {
+        id: 'npc-lyra', name: 'Lyra Vance', aliases: ['Lyra', 'the healer'], present: true,
+        role: 'Temple healer; former field medic of the Third Legion', species: 'elf',
+        personality: 'Calm, dry, protective of the young; slow to trust strangers.',
+        background: 'Raised in the Silver Temple, she served a decade as a field medic before taking her vows and returning to tend the poor of Ironvale and its mines.',
+        speech: 'Clipped and formal.', mood: 'tired', appearance: 'grey robes',
+        customFields: { Abilities: 'healing magic, shortsword', Level: '5', Faction: 'Silver Temple' },
+        relationship: { trust: 40 }, memories: ['healed Ren'],
+    };
+    const npcs = [
+        lyra,
+        { id: 'npc-guard', name: 'Gate guard', role: 'guard', archived: true, present: false },
+        { id: 'npc-ren', name: 'Ren', role: '', customFields: { class: 'Ranger', Skills: 'tracking, archery' }, personality: 'Quiet.' },
+        { id: 'npc-empty', name: 'Mira' },
+        null,
+        'not a dossier',
+    ];
+    const profiles = buildNpcProfiles(npcs, { customFieldNames: ['Class', 'Abilities', 'Skills', 'Level', 'Faction'] });
+    assert.deepEqual(profiles.map(profile => profile.id), ['npc-lyra', 'npc-ren', 'npc-empty'], 'archived and malformed entries are left out, dossier order kept');
+    assert.deepEqual(Object.keys(profiles[0]), ['id', 'name', 'aliases', 'present', 'role', 'summary']);
+    assert.deepEqual({ ...profiles[0], aliases: [...profiles[0].aliases] }, {
+        id: 'npc-lyra', name: 'Lyra Vance', aliases: ['Lyra', 'the healer'], present: true,
+        role: 'Temple healer',
+        summary: 'Temple healer; former field medic of the Third Legion (elf). Abilities: healing magic, shortsword. Calm, dry, protective of the young; slow to trust strangers. Raised in the Silver Temple, she served…',
+    });
+    assert.ok(profiles[0].summary.length <= NPC_PROFILE_SUMMARY_MAX);
+    assert.doesNotMatch(profiles[0].summary, /Level|Faction|tired|grey robes|Clipped/, 'only identity, abilities, personality and background are used');
+    assert.deepEqual([profiles[1].role, profiles[1].summary, profiles[1].present], ['Ranger', 'Ranger. Skills: tracking, archery. Quiet.', false], 'a Class custom field stands in for an empty role and is not repeated');
+    assert.deepEqual([profiles[2].role, profiles[2].summary, [...profiles[2].aliases]], ['', '', []]);
+
+    // Plain frozen copies: the dossier is not shared or changed.
+    assert.ok(Object.isFrozen(profiles) && profiles.every(profile => Object.isFrozen(profile) && Object.isFrozen(profile.aliases)));
+    assert.notEqual(profiles[0].aliases, lyra.aliases);
+    assert.throws(() => { 'use strict'; profiles[0].aliases.push('x'); }, TypeError);
+    lyra.aliases.push('Vance');
+    assert.deepEqual([...profiles[0].aliases], ['Lyra', 'the healer']);
+    assert.deepEqual(Object.keys(lyra.customFields), ['Abilities', 'Level', 'Faction']);
+
+    // Unconfigured custom fields are not read; without a dossier role the summary starts from species.
+    assert.equal(buildNpcProfile({ id: 'x', name: 'X', species: 'dwarf', customFields: { Class: 'Cleric' }, personality: 'Gruff' }).summary, 'dwarf. Gruff.');
+    assert.equal(buildNpcProfile({ id: 'x', name: 'X', species: 'Elf', role: 'Elf archer' }).summary, 'Elf archer.', 'species already in the role is not repeated');
+    const longRole = buildNpcProfile({ id: 'x', name: 'X', role: 'Keeper of the old northern lighthouse and the drowned archive beneath the harbour cliffs' }).role;
+    assert.ok(longRole.length <= NPC_PROFILE_ROLE_MAX && longRole.endsWith('…'), longRole);
+    assert.equal(buildNpcProfile({ id: 'x', name: 'X', role: 'Blacksmith — once a soldier' }).role, 'Blacksmith');
+});
+
+test('v1.2.2 npc profiles leave out the dead, archived or not, and keep the living and the restored', () => {
+    const npcs = [
+        { id: 'alive', name: 'Alive', lifeState: 'alive', lifeStateCertainty: 'explicit' },
+        { id: 'unknown', name: 'Unknown', lifeState: 'unknown' },
+        { id: 'dead-explicit', name: 'Dead', lifeState: 'deceased', lifeStateCertainty: 'explicit', archived: false },
+        { id: 'dead-inferred', name: 'Probably dead', lifeState: 'deceased', lifeStateCertainty: 'inferred' },
+        { id: 'dead-case', name: 'Dead case', lifeState: ' Deceased ' },
+        { id: 'dead-archived', name: 'Archived dead', lifeState: 'deceased', archived: true, archiveReason: 'deceased' },
+        { id: 'restored', name: 'Restored', lifeState: 'alive', lifeStateCertainty: 'explicit', archived: false, archiveReason: '' },
+    ];
+    assert.deepEqual(buildNpcProfiles(npcs).map(profile => profile.id), ['alive', 'unknown', 'restored']);
+    // The same through the dossier owner's own records: a confirmed death kept unarchived
+    // (Auto-archive deaths off) is left out; a manual Restore marks the NPC alive again.
+    const dead = normalizeNpcRecord({ id: 'n1', name: 'Orrin', lifeState: 'deceased', lifeStateCertainty: 'explicit' });
+    assert.equal(dead.archived, false);
+    const restored = setNpcArchived(setNpcArchived(dead, true, { reason: 'deceased' }), false, { allowDeathCorrection: true });
+    assert.deepEqual(buildNpcProfiles([dead]), []);
+    assert.deepEqual(buildNpcProfiles([restored]).map(profile => profile.id), ['n1']);
+});
+
+test('v1.2.2 npc profiles never throw and read nothing but the dossiers given', () => {
+    assert.deepEqual(buildNpcProfiles(undefined), []);
+    assert.deepEqual(buildNpcProfiles({ npcs: [] }), []);
+    const hostile = { id: 'h', name: 'H' };
+    Object.defineProperty(hostile, 'role', { get() { throw new Error('boom'); } });
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+        assert.deepEqual(buildNpcProfiles([hostile]), []);
+    } finally {
+        console.warn = warn;
+    }
+    assert.deepEqual(buildNpcProfiles([{ id: 'a', name: 'A', role: 7, aliases: 'Al', customFields: ['bad'] }], { customFieldNames: 'Class' }).map(p => [p.role, [...p.aliases], p.summary]), [['7', [], '7.']]);
+});
+
+test('v1.2.2 the runtime shares npcProfiles() beside the unchanged npcs(), with no request or prompt', () => {
+    runHostScenario('npc-profiles', async () => {
+        const suite = globalThis.StorySuite;
+        const api = suite.api('npc-state-delta');
+        assert.deepEqual(api.npcProfiles(), [], 'empty until the chat\'s dossiers load');
+        mockState.extensionSettings.npc_state_delta.customFieldNames = ['Abilities'];
+        mockState.quietResponder = async () => JSON.stringify({ npcs: [{ name: 'Yunyun', present: true, role: 'adventurer', species: 'human', personality: 'Shy, earnest and fiercely loyal to her rival.', customFields: { Abilities: 'advanced magic' }, mood: 'nervous, eager', identityKind: 'proper_name', dossierSignal: 'high', dossierReason: 'named companion', directInteraction: true, relationshipImpact: 'none', relationshipDelta: { trust: 0, affection: 0, desire: 0, tension: 0 } }] });
+        mockState.context.chat.push({ is_user: true, is_system: false, name: 'Kazuma', mes: 'Who is at the gate?' });
+        mockState.context.chat.push({ is_user: false, is_system: false, name: 'Megumin', mes: 'Yunyun, the shy human adventurer who casts advanced magic, waves nervously from the gate.', swipe_id: 0, swipes: ['Yunyun, the shy human adventurer who casts advanced magic, waves nervously from the gate.'] });
+        const id = mockState.context.chat.length - 1;
+        await Promise.all((mockState.listeners.get('message_received') || []).map(fn => fn(id)));
+        await sleep(200);
+
+        const npcs = api.npcs();
+        assert.deepEqual(npcs.map(npc => Object.keys(npc)), [['id', 'name', 'aliases', 'present', 'archived']], 'npcs() is unchanged');
+        const requests = mockState.rawCalls.length;
+        const prompts = mockState.prompts.length;
+        const profiles = api.npcProfiles();
+        assert.equal(profiles.length, 1);
+        const [yunyun] = profiles;
+        assert.deepEqual([yunyun.id, yunyun.name, yunyun.present, yunyun.role], [npcs[0].id, 'Yunyun', true, 'adventurer']);
+        assert.match(yunyun.summary, /^adventurer \(human\)\./);
+        assert.ok(yunyun.summary.length <= 200);
+        assert.ok(Object.isFrozen(profiles) && Object.isFrozen(yunyun));
+        assert.equal(mockState.rawCalls.length, requests, 'no model request');
+        assert.equal(mockState.prompts.length, prompts, 'no prompt write');
+        assert.notEqual(api.npcProfiles(), profiles, 'each call returns a fresh copy');
+    });
+});
+
+test('v1.2.2 openDossier resolution: id first, then a unique name or alias among non-archived NPCs', () => {
+    const npcs = [
+        { id: 'npc-lyra', name: 'Lyra Vance', aliases: ['Lyra', 'the Healer'] },
+        { id: 'npc-orrin', name: 'Orrin Hask', aliases: ['Capt. Hask'], archived: true, archiveReason: 'manual' },
+        { id: 'npc-ren', name: 'Ren', aliases: ['Lyra Vance'] },
+        { id: 'npc-twin-a', name: 'Twin', aliases: ['Sam'] },
+        { id: 'npc-twin-b', name: 'twin', aliases: ['Sam'] },
+        { id: 'npc-lyra-alias', name: 'Old Orrin', aliases: ['Orrin Hask'] },
+        { name: 'No id' },
+        null,
+    ];
+    assert.equal(resolveDossierTarget(npcs, 'npc-lyra'), 'npc-lyra');
+    assert.equal(resolveDossierTarget(npcs, '  npc-ren '), 'npc-ren');
+    assert.equal(resolveDossierTarget(npcs, 'npc-orrin'), '', 'an archived id opens nothing, with no name fallback');
+    assert.equal(resolveDossierTarget(npcs, 'lyra vance'), 'npc-lyra', 'a name matches case-insensitively and wins over another NPC\'s alias');
+    assert.equal(resolveDossierTarget(npcs, 'THE HEALER'), 'npc-lyra', 'an alias matches when no name does');
+    assert.equal(resolveDossierTarget(npcs, 'Orrin Hask'), 'npc-lyra-alias', 'archived NPCs are not matched by name');
+    assert.equal(resolveDossierTarget(npcs, 'Capt. Hask'), '', 'an archived NPC\'s alias matches nothing');
+    assert.equal(resolveDossierTarget(npcs, 'Twin'), '', 'an ambiguous name opens nothing');
+    assert.equal(resolveDossierTarget(npcs, 'Sam'), '', 'an ambiguous alias opens nothing');
+    assert.equal(resolveDossierTarget(npcs, 'Lyr'), '', 'only exact matches');
+    assert.equal(resolveDossierTarget(npcs, 'nobody'), '');
+    assert.equal(resolveDossierTarget(npcs, ''), '');
+    assert.equal(resolveDossierTarget(npcs, null), '');
+    assert.equal(resolveDossierTarget(npcs, { id: 'npc-lyra' }), '');
+    assert.equal(resolveDossierTarget(undefined, 'npc-lyra'), '');
+    const hostile = [{ get id() { throw new Error('boom'); } }];
+    assert.equal(resolveDossierTarget(hostile, 'x'), '', 'never throws');
+});
+
+test('v1.2.2 the runtime openDossier opens the launcher dossier path, and nothing for archived or unknown NPCs', () => {
+    runHostScenario('open-dossier', async () => {
+        const suite = globalThis.StorySuite;
+        const api = suite.api('npc-state-delta');
+        const opened = [];
+        document.addEventListener('npc-state-delta:open-dossier', event => { opened.push(event.detail.npcId); event.detail.handled = true; });
+        assert.equal(api.openDossier('Yunyun'), false, 'nothing before the dossiers exist');
+
+        mockState.quietResponder = async () => JSON.stringify({ npcs: [
+            { name: 'Yunyun', aliases: ['Yun'], present: true, role: 'adventurer', identityKind: 'proper_name', dossierSignal: 'high', dossierReason: 'named companion', directInteraction: true, relationshipImpact: 'none', relationshipDelta: { trust: 0, affection: 0, desire: 0, tension: 0 } },
+            { name: 'Wiz', present: true, role: 'shopkeeper', identityKind: 'proper_name', dossierSignal: 'high', dossierReason: 'named shopkeeper', directInteraction: true, relationshipImpact: 'none', relationshipDelta: { trust: 0, affection: 0, desire: 0, tension: 0 } },
+        ] });
+        mockState.context.chat.push({ is_user: true, is_system: false, name: 'Kazuma', mes: 'Who is here?' });
+        mockState.context.chat.push({ is_user: false, is_system: false, name: 'Megumin', mes: 'Yunyun (Yun to friends) waves while Wiz minds her shop.', swipe_id: 0, swipes: ['Yunyun (Yun to friends) waves while Wiz minds her shop.'] });
+        const id = mockState.context.chat.length - 1;
+        await Promise.all((mockState.listeners.get('message_received') || []).map(fn => fn(id)));
+        await sleep(200);
+        const [yunyun, wiz] = ['Yunyun', 'Wiz'].map(name => api.npcs().find(npc => npc.name === name));
+        assert.ok(yunyun && wiz);
+
+        const requests = mockState.rawCalls.length;
+        const prompts = mockState.prompts.length;
+        const before = JSON.stringify(globalThis.NPCStateDelta.getState());
+        assert.equal(api.openDossier(yunyun.id), true);
+        assert.equal(api.openDossier('yunyun'), true, 'name fallback');
+        assert.equal(api.openDossier('YUN'), true, 'alias fallback');
+        assert.equal(api.openDossier('nobody'), false);
+        assert.equal(api.openDossier(), false);
+        assert.deepEqual(opened, [yunyun.id, yunyun.id, yunyun.id], 'the same open path as the launcher and present cast');
+        assert.equal(mockState.rawCalls.length, requests, 'no model request');
+        assert.equal(mockState.prompts.length, prompts, 'no prompt write');
+        assert.equal(JSON.stringify(globalThis.NPCStateDelta.getState()), before, 'no data change');
+
+        await globalThis.NPCStateDelta.archive(wiz.id);
+        assert.equal(api.npcs().find(npc => npc.id === wiz.id)?.archived, true);
+        assert.equal(api.openDossier(wiz.id), false, 'archived by id');
+        assert.equal(api.openDossier('Wiz'), false, 'archived by name');
+        assert.deepEqual(opened, [yunyun.id, yunyun.id, yunyun.id]);
+    });
+});
+
+test('v1.2.2 Delta announces shows: [\'chatter\'] while enabled, never while off', () => {
+    const suite = fresh();
+    const api = { npcs: () => [], manage: buildManageApi({ setEnabled: () => {} }) };
+    assert.deepEqual(SUITE_SHOWS, ['chatter']);
+    announceNpcStateDelta({ enabled: true, version: '1.2.2', api, shows: SUITE_SHOWS }, suite);
+    assert.deepEqual(suite.providers().find(item => item.id === SUITE_ID).shows, ['chatter']);
+    announceNpcStateDelta({ enabled: false, version: '1.2.2', api, shows: SUITE_SHOWS }, suite);
+    const off = suite.providers().find(item => item.id === SUITE_ID);
+    assert.equal(off.enabled, false);
+    assert.equal('shows' in off, false, 'the enabled: false announcement carries no shows');
+    announceNpcStateDelta({ enabled: true, version: '1.2.2', api }, suite);
+    assert.equal('shows' in suite.providers().find(item => item.id === SUITE_ID), false, 'without shows, none is announced');
+});
+
+test('v1.2.2 tokens(): the injection by section plus one-pass capture, about four characters a token', () => {
+    const injection = [
+        'NPC STATE DELTA DOSSIER. Only confirmed-present NPCs are included.', // 66
+        'IDENTITY FIRST / DOMINATES: personality sets identity.', // 54
+        '- Yunyun: personality: shy; speech: polite', // 42
+        '- Wiz: personality: kind', // 24
+        'MENTIONED, NOT PRESENT: NPCs the recent story names.', // 52
+        '- Megumin (mentioned, not present; archwizard)', // 46
+        'DECEASED, REFERENCED ONLY: these NPCs are dead.', // 47
+        '- Old Brenn (deceased)', // 22
+        'RELATIONSHIP-TO-BEHAVIOR RUBRIC: trust permits candor.', // 54
+    ].join('\n');
+    assert.deepEqual(injectionSections(injection), [
+        { label: 'Dossier instructions', chars: 66 + 1 + 54 },
+        { label: 'Present NPC cards', chars: 43 + 25 },
+        { label: 'Mentioned NPCs', chars: 53 + 47 },
+        { label: 'Deceased references', chars: 48 + 23 },
+        { label: 'Relationship rubric', chars: 55 },
+    ]);
+    const estimate = replyTokenEstimate({ injection });
+    assert.deepEqual(estimate.parts.map(part => [part.label, part.input, part.output]), [
+        ['Dossier instructions', 31, 0], ['Present NPC cards', 17, 0], ['Mentioned NPCs', 25, 0], ['Deceased references', 18, 0], ['Relationship rubric', 14, 0],
+    ]);
+    assert.deepEqual([estimate.input, estimate.output], [105, 0], 'output stays 0: the injection asks for nothing in the reply');
+    assert.ok(Math.abs(estimate.input - injection.length / 4) <= estimate.parts.length, 'about four characters a token');
+
+    const capture = replyTokenEstimate({ injection, captureChars: 7998, captureOutputChars: NARRATION_CAPTURE_OUTPUT_ESTIMATE_CHARS });
+    assert.deepEqual(capture.parts.slice(-2), [
+        { label: 'One-pass capture instruction', input: 2000, output: 0 },
+        { label: 'One-pass capture block', input: 0, output: 300 },
+    ]);
+    assert.deepEqual([capture.input, capture.output], [2105, 300]);
+    assert.deepEqual(replyTokenEstimate(), { input: 0, output: 0, parts: [] });
+    assert.deepEqual(replyTokenEstimate({ injection: '', captureChars: 400, captureOutputChars: 80 }), { input: 100, output: 20, parts: [
+        { label: 'One-pass capture instruction', input: 100, output: 0 }, { label: 'One-pass capture block', input: 0, output: 20 },
+    ] });
+    assert.deepEqual(copyTokenEstimate({ input: 999, parts: [{ label: 'x', input: '3.4', output: -2 }, null] }), { input: 3, output: 0, parts: [{ label: 'x', input: 3, output: 0 }] });
+    const manage = buildManageApi({ tokens: () => { throw new Error('boom'); } });
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+        assert.deepEqual(manage.tokens(), { input: 0, output: 0, parts: [] }, 'never throws');
+    } finally {
+        console.warn = warn;
+    }
+    assert.deepEqual(buildManageApi().tokens(), { input: 0, output: 0, parts: [] });
+});
+
+test('v1.2.2 the runtime: tokens() measures the live injection, shows: chatter, now lines and chatter bubbles', () => {
+    runHostScenario('present-scene', async () => {
+        const suite = globalThis.StorySuite;
+        const own = () => suite.providers().find(item => item.id === 'npc-state-delta');
+        assert.deepEqual(own().shows, ['chatter'], 'shows chatter while enabled');
+        const manage = own().api.manage;
+        assert.deepEqual(manage.tokens(), { input: 0, output: 0, parts: [] }, 'nothing before a scene');
+
+        const worldState = '**👥 NPCs Present:**\n**Yunyun:**\n* *Outfit:* red ribbon\n* *Mood:* flustered';
+        const chatter = '**Yunyun:** <i>Did he see?</i>\nWiz: Such a nice couple.\nMegumin: Boring.';
+        const reply = `Yunyun waves from the gate while Wiz minds her shop.\n<World_State>${worldState}</World_State>\n<NPC_Inner_Chatter>${chatter}</NPC_Inner_Chatter>`;
+        const reads = [];
+        globalThis.StoryBlock = {
+            listBlocks: () => [
+                { tag: 'World_State', display: 'scene', enabled: true },
+                { tag: 'NPC_Inner_Chatter', display: 'chatter', enabled: true },
+            ],
+            blockInText: (text, tag) => {
+                reads.push(tag);
+                const found = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(String(text));
+                return found ? { tag, text: found[1], messageIndex: null } : null;
+            },
+        };
+        mockState.quietResponder = async () => JSON.stringify({ npcs: [
+            { name: 'Yunyun', present: true, role: 'adventurer', mood: 'nervous', status: 'healthy', identityKind: 'proper_name', dossierSignal: 'high', dossierReason: 'named companion', directInteraction: true, relationshipImpact: 'none', relationshipDelta: { trust: 0, affection: 0, desire: 0, tension: 0 } },
+            { name: 'Wiz', present: true, role: 'shopkeeper', mood: 'cheerful', identityKind: 'proper_name', dossierSignal: 'high', dossierReason: 'named shopkeeper', directInteraction: true, relationshipImpact: 'none', relationshipDelta: { trust: 0, affection: 0, desire: 0, tension: 0 } },
+        ] });
+        mockState.context.chat.push({ is_user: true, is_system: false, name: 'Kazuma', mes: 'Who is here?' });
+        mockState.context.chat.push({ is_user: false, is_system: false, name: 'Megumin', mes: reply, swipe_id: 0, swipes: [reply] });
+        const id = mockState.context.chat.length - 1;
+        await Promise.all((mockState.listeners.get('message_received') || []).map(fn => fn(id)));
+        await sleep(200);
+
+        // tokens(): the same injection Delta sends, split by section; no request is made for it.
+        const requests = mockState.rawCalls.length;
+        const sent = mockState.prompts.filter(args => args[0] === 'npc_state_delta_live_dossier').at(-1)?.[1] || '';
+        assert.ok(sent.length > 0);
+        const tokens = manage.tokens();
+        assert.ok(tokens.parts.some(part => part.label === 'Present NPC cards' && part.input > 0));
+        assert.equal(tokens.output, 0);
+        assert.equal(tokens.input, tokens.parts.reduce((total, part) => total + part.input, 0));
+        assert.ok(Math.abs(tokens.input - sent.length / 4) <= tokens.parts.length, `${tokens.input} ≈ ${sent.length} / 4`);
+        assert.equal(mockState.rawCalls.length, requests, 'no model request');
+
+        // Alone: the now line is Delta's own; chatter bubbles beside the speakers; Others for Megumin.
+        const alone = globalThis.NPCStateDelta.presentCastHtml();
+        assert.match(alone, /data-delta-scene="/);
+        assert.match(alone, /class="npc-state-delta-present-now" data-delta-text/);
+        assert.doesNotMatch(alone, /present-now-world/, 'without Story Block keeping the scene, Delta\'s own now line');
+        assert.match(alone, /npc-state-delta-present-cell-chatter[\s\S]*npc-state-delta-chatter-speech/);
+        assert.match(alone, /npc-state-delta-chatter-others/);
+        assert.doesNotMatch(alone, /<i>Did he see|Such a nice couple|Boring|flustered/, 'story text never enters the markup');
+        assert.ok(reads.includes('NPC_Inner_Chatter'));
+        assert.match(inlineAnchors[0]?.innerHTML || '', /npc-state-delta-present-cell-chatter/, 'the in-chat cards show the bubbles too');
+
+        // Story Block keeps the scene: the now line comes from its World State.
+        suite.announce({ id: 'story-block', name: 'Story Block', version: '0.9.1', owns: ['scene'] });
+        await sleep(10);
+        assert.match(globalThis.NPCStateDelta.presentCastHtml(), /npc-state-delta-present-now npc-state-delta-present-now-world/);
+        assert.equal(mockState.rawCalls.length, requests, 'display only: still no request');
+        const state = JSON.stringify(globalThis.NPCStateDelta.getState());
+        globalThis.NPCStateDelta.presentCastHtml();
+        globalThis.NPCStateDelta.renderInline();
+        assert.equal(JSON.stringify(globalThis.NPCStateDelta.getState()), state, 'no data change');
+
+        const enable = uiHandlers.get('change.npcStateDelta|#npc_state_delta_enabled');
+        enable.call({ checked: false });
+        assert.equal(own().enabled, false);
+        assert.equal('shows' in own(), false, 'off: no shows, so Story Block keeps its own Chatter tab');
+        assert.deepEqual(own().api.manage.tokens(), { input: 0, output: 0, parts: [] }, 'off: Delta adds nothing');
+        enable.call({ checked: true });
+        assert.deepEqual(own().shows, ['chatter']);
+        delete globalThis.StoryBlock;
+    });
 });
