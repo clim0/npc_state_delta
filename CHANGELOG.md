@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.1.9 - 17 October 2026
+
 - One-pass narration capture now works alongside extensions that rewrite a reply when it arrives (for example by wrapping their own blocks in a comment). Delta parsed the block but bound it to the exact reply text, so the rewrite made the scan miss it and fall back to a normal request. The block is now bound to the reply's position and the messages before it; editing, deleting or swiping still drops it. The diagnostics export now includes the capture counters, and Diagnostics shows how many blocks are waiting for their scan.
 
 ## 1.1.8 - 17 October 2026
