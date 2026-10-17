@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.1.7 - 17 October 2026
+
+- When the story mentions an NPC who isn't in the scene (off-screen, or archived after a long absence), the roleplay model now gets one short line of their established facts: role, home base, custom fields and how they feel about you. A returning NPC arrives as they left instead of being reinvented. Mention lines and the deceased lines share a cap of four per reply, living NPCs first, and never displace the NPCs in the scene.
+- NPCs are recognised by any distinctive part of their name ("Hask" or "Orrin" for "Capt. Orrin Hask"), not only their first name. Surnames, one-word nicknames and names that are everyday words ("Will") must be capitalised, so "I will go" no longer brings in Will Turner. Abbreviated titles ("Capt.", "Dr.") and role descriptions ("the innkeeper") no longer recall anyone.
+- Fixed: a new NPC sharing only a job title with a known NPC (a different innkeeper in another town) was merged into the known NPC's dossier, overwriting their role and location. Such a match now needs the scan to say it is the same person, the NPC to have been present, or the places to match.
+- Aliases and nicknames can be edited and locked under **Edit dossier**, and are shown on the dossier page.
+- Diagnostics lists NPCs that are only mentioned separately from those sent in full.
+
 ## 1.1.6 - 17 October 2026
 
 - When someone talks about a confirmed-dead NPC, the roleplay model now gets one short line about them (gender, role, a bond and how they died), so it no longer forgets they are dead or invents their death. Up to three per reply, sent even when nobody is present, and never at the cost of the present NPCs.
