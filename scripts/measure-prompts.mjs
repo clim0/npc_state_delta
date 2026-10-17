@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildScannerPrompt, buildProfileRefreshPrompt, buildInjection } from '../core.js';
+import { buildScannerPrompt, buildProfileRefreshPrompt, buildInjection, buildNarrationCapturePrompt } from '../core.js';
 
 // Same short source scenes used in the legacy/Beta comparison. No provider calls.
 const cases = [
@@ -74,4 +74,32 @@ const selected = { id: 'mara', name: 'Mara', present: true, personality: 'Patien
 const injection = buildInjection([selected], 'Mara discusses the survey.', 1, 3);
 for (const required of ['Patient and observant', 'Keeps firm boundaries', 'concise formal sentences', 'Squares the ledger']) assert.ok(injection.includes(required), `accepted selected characterization missing: ${required}`);
 console.log(JSON.stringify({ name: 'accepted-characterization-injection', chars: injection.length, estimatedTokens: estimateTokens(injection), requiredFieldsPresent: true }));
+
+// Report-only: the opt-in one-pass narration capture instruction (default off), built by the
+// production builder from the generation-time context (history up to the user's message; the reply
+// does not exist yet). It rides in the roleplay extension prompt after the dossier injection, so the
+// final extension prompt is both joined, as updateInjection sends it. Compared with the quick-scan
+// request it replaces when a complete block arrives; no baseline is asserted.
+const captureFixtures = [
+  ...cases.map(fixture => ({ name: fixture.name, npcs: fixture.npcs, userName: 'Ari', generationTranscript: `USER: ${fixture.user}`, scanTranscript: `USER: ${fixture.user}\nASSISTANT: ${fixture.assistant}` })),
+  { name: 'ordinary-two-npc-profiles', npcs: [ryu, { ...sora, mood: 'cheerful', location: 'Hospice' }], userName: 'Lucien', generationTranscript: ordinaryAHistory, scanTranscript: ordinaryAHistory },
+];
+for (const fixture of captureFixtures) {
+  const charName = fixture.userName === 'Ari' ? 'Character' : 'Narrator';
+  const capture = buildNarrationCapturePrompt({ transcript: fixture.generationTranscript, existingNpcs: fixture.npcs, userName: fixture.userName, charName });
+  const scanner = buildScannerPrompt({ transcript: fixture.scanTranscript, currentTranscript: fixture.scanTranscript, existingNpcs: fixture.npcs, userName: fixture.userName, charName });
+  const dossierInjection = buildInjection(fixture.npcs, fixture.generationTranscript, 1, 3);
+  const finalExtensionPrompt = [dossierInjection, capture].filter(Boolean).join('\n\n');
+  console.log(JSON.stringify({
+    name: `narration-capture-${fixture.name}`,
+    captureChars: capture.length,
+    captureEstimatedTokens: estimateTokens(capture),
+    replacedScannerCharsIncludingSystem: scanner.length + system.length,
+    replacedScannerEstimatedInputTokens: estimateTokens(scanner) + estimateTokens(system),
+    dossierInjectionChars: dossierInjection.length,
+    finalExtensionPromptChars: finalExtensionPrompt.length,
+    finalExtensionPromptEstimatedTokens: estimateTokens(finalExtensionPrompt),
+  }));
+}
 console.log('Estimator: ASCII/3.5 + non-ASCII*1.1, rounded per prompt component; not provider usage. Main scanner fixtures only; conditional focused passes/retries are additional requests.');
+console.log('Narration capture (opt-in, default off): added to every armed roleplay request; the JSON block in each reply is extra roleplay output not counted here. A missing/broken block falls back to the scanner request.');

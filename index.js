@@ -61,6 +61,9 @@ import {
     manualLifeStateRecord,
     protectTerminalNpc,
     parseScanJson,
+    extractNarrationCapture,
+    parseNarrationCapture,
+    buildNarrationCapturePrompt,
     npcMatchesLabel,
     normalizeName,
     normalizeGender,
@@ -232,6 +235,13 @@ const loadingChatStates = new Map();
 const hydrationErrors = new Map();
 const pendingAutoScans = new Map();
 const assistantReceipts = new Map();
+// One-pass narration capture: armed for each roleplay reply, stripped from the stored message on
+// receipt and consumed once by that message's automatic scan in place of the scanner request.
+// Kept in memory only; an edit, reload or broken block falls back to the ordinary scan.
+const narrationCaptures = new Map();
+const NARRATION_CAPTURE_LIMIT = 8;
+const narrationCaptureStats = { requested: 0, used: 0, missing: 0, invalid: 0, unterminated: 0 };
+let narrationCaptureArmed = false;
 const stateWriteTimers = new Map();
 const stateWritePromises = new Map();
 const stateVersions = new Map();
@@ -451,6 +461,7 @@ const DEFAULTS = Object.freeze({
     enabled: true,
     autoScan: true,
     fullScanEveryTurn: false,
+    narrationCapture: false,
     scannerConnectionProfile: '',
     portraitGenerationEnabled: true,
     portraitThemePreset: 'fantasy_anime',
@@ -551,6 +562,7 @@ function getSettings() {
     assign('injectBudgetTokens', legacyDefaultBudget ? 4000 : Math.max(512, Math.min(6000, Math.round(Number(settings.injectBudgetTokens) || 4000))));
     assign('injectBudgetDefaultUpgraded', true);
     assign('fullScanEveryTurn', settings.fullScanEveryTurn === true);
+    assign('narrationCapture', settings.narrationCapture === true);
     assign('scannerConnectionProfile', typeof settings.scannerConnectionProfile === 'string' ? settings.scannerConnectionProfile.trim() : '');
     assign('portraitGenerationEnabled', settings.portraitGenerationEnabled !== false);
     assign('portraitThemePreset', PORTRAIT_THEME_PRESETS[settings.portraitThemePreset] ? settings.portraitThemePreset : 'custom');
@@ -2381,23 +2393,27 @@ function updateInjection() {
     }
     if (injectionKey === 'no-chat') return clear('No chat is open.');
     if (!settings.enabled) return clear('NPC State Delta is disabled.');
-    if (!settings.inject) return clear('"Inject present NPC state" is off.');
     const state = getChatState();
+    const capture = narrationCaptureArmed && narrationCaptureEnabled(settings)
+        ? buildNarrationCapturePrompt(scannerPromptOptions(state, settings, recentTranscript(4)))
+        : '';
+    if (!settings.inject && !capture) return clear('"Inject present NPC state" is off.');
     const namedNpcIds = namedByPlayerNpcIds(state);
-    const prompt = buildInjection(state.npcs, recentTranscript(4), state.turn, settings.injectLimit, settings.behaviorCriteria, settings.injectBudgetTokens, state.socialGraph, { namedNpcIds, customFieldNames: settings.customFieldNames });
+    const prompt = settings.inject ? buildInjection(state.npcs, recentTranscript(4), state.turn, settings.injectLimit, settings.behaviorCriteria, settings.injectBudgetTokens, state.socialGraph, { namedNpcIds, customFieldNames: settings.customFieldNames }) : '';
     const present = (state.npcs || []).filter(npc => npc?.present && !npc?.archived);
     const depth = Math.max(0, Math.min(20, Number(settings.injectDepth) || 1));
     lastInjection = {
         text: prompt,
-        reason: prompt ? '' : (present.length ? 'No present NPC was selected for injection.' : 'No NPC is marked present in the latest scanned scene.'),
+        reason: prompt ? '' : (!settings.inject ? '"Inject present NPC state" is off.' : (present.length ? 'No present NPC was selected for injection.' : 'No NPC is marked present in the latest scanned scene.')),
         at: Date.now(),
         chatKey: injectionKey,
         depth,
         namedByPlayer: (state.npcs || []).filter(npc => namedNpcIds.includes(npc.id)).map(npc => npc.name),
+        captureChars: capture.length,
     };
     ctx.setExtensionPrompt?.(
         PROMPT_KEY,
-        prompt,
+        [prompt, capture].filter(Boolean).join('\n\n'),
         extension_prompt_types.IN_CHAT,
         depth,
         false,
@@ -2424,6 +2440,7 @@ function injectionPreview() {
         chars: text.length,
         estimatedTokens: Math.ceil(text.length / 4),
         budgetTokens: Number(settings.injectBudgetTokens) || 0,
+        captureChars: Number(lastInjection.captureChars) || 0,
         text,
     };
 }
@@ -3620,6 +3637,74 @@ function applyStaleLifecycleAfterScan(state, scanResult, transcript, settings, {
     });
 }
 
+function scannerPromptOptions(state, settings, transcript, extra = {}) {
+    const ctx = getContext();
+    return {
+        transcript,
+        customFieldNames: settings.customFieldNames,
+        existingNpcs: state.npcs,
+        candidates: state.candidates,
+        userName: ctx.name1 || 'User',
+        charName: ctx.name2 || 'Character',
+        maxNpcs: settings.maxNpcs,
+        relationshipBaseline: settings.relationshipBaseline,
+        relationshipCaps: settings.relationshipCaps,
+        relationshipCriteria: settings.relationshipCriteria,
+        impactCriteria: settings.relationshipImpactCriteria,
+        memoryCriteria: settings.memoryCriteria,
+        admissionMode: settings.admissionMode,
+        ...extra,
+    };
+}
+
+function narrationCaptureEnabled(settings = getSettings()) {
+    return Boolean(settings.enabled && settings.narrationCapture && settings.autoScan && !settings.fullScanEveryTurn);
+}
+function narrationCaptureKey(chatKey, messageId, message) {
+    return `${chatKey}|${messageId}|${fingerprintMessage(message || {})}`;
+}
+// Runs before any lineage key reads the reply, so every checkpoint binds the stripped text. Any
+// block is removed even with the mode off; only a complete, parseable one is kept for the scan.
+function captureNarrationBlock(chatKey, messageId, message, armed) {
+    const extracted = extractNarrationCapture(message.mes);
+    if (extracted.status === 'none') {
+        if (armed) narrationCaptureStats.missing += 1;
+        return;
+    }
+    message.mes = extracted.text;
+    const swipeId = Number(message.swipe_id);
+    if (Array.isArray(message.swipes) && typeof message.swipes[swipeId] === 'string') message.swipes[swipeId] = extractNarrationCapture(message.swipes[swipeId]).text;
+    try { getContext().updateMessageBlock?.(messageId, message); }
+    catch (error) { console.warn('[NPC State Delta] could not re-render a reply after removing its capture block.', error); }
+    // Only a reply written under the instruction may stand in for a scan; a block in any other
+    // message (sendas, card text, another extension) is removed and ignored.
+    if (!armed || !narrationCaptureEnabled() || !extracted.text.trim()) return;
+    const parsed = extracted.status === 'found' ? parseNarrationCapture(extracted.raw) : null;
+    if (!parsed) {
+        narrationCaptureStats[extracted.status === 'found' ? 'invalid' : 'unterminated'] += 1;
+        return;
+    }
+    narrationCaptures.set(narrationCaptureKey(chatKey, messageId, message), { parsed, raw: extracted.raw });
+    while (narrationCaptures.size > NARRATION_CAPTURE_LIMIT) narrationCaptures.delete(narrationCaptures.keys().next().value);
+}
+function receiveNarrationBlock(messageId) {
+    const armed = narrationCaptureArmed;
+    narrationCaptureArmed = false;
+    // Drop the instruction now: later receipt paths may return before refreshing the injection,
+    // and a quiet generation from another extension must never carry it.
+    if (lastInjection.captureChars) updateInjection();
+    const chatKey = getChatKey();
+    const message = Number.isInteger(messageId) ? getContext().chat?.[messageId] : null;
+    if (!getSettings().enabled || chatKey === 'no-chat' || !message || message.is_user || message.is_system) return;
+    captureNarrationBlock(chatKey, messageId, message, armed);
+}
+function takeNarrationCapture(chatKey, messageId, message) {
+    const key = narrationCaptureKey(chatKey, messageId, message);
+    const capture = narrationCaptures.get(key) || null;
+    narrationCaptures.delete(key);
+    return capture && narrationCaptureEnabled() ? capture : null;
+}
+
 async function scanNow({ manual = false, messageId = null, allowDuringSwipe = false } = {}) {
     const settings = getSettings();
     if (!settings.enabled) return false;
@@ -3658,43 +3743,32 @@ async function scanNow({ manual = false, messageId = null, allowDuringSwipe = fa
     setScanIndicator(true);
     const state = getChatState(scanChatKey);
     const scanStateVersion = Number(stateVersions.get(scanChatKey) || 0);
-    const prompt = buildScannerPrompt({
-        transcript,
-        customFieldNames: settings.customFieldNames,
-        existingNpcs: state.npcs,
-        candidates: state.candidates,
-        userName: ctx.name1 || 'User',
-        charName: ctx.name2 || 'Character',
-        maxNpcs: settings.maxNpcs,
-        relationshipBaseline: settings.relationshipBaseline,
-        relationshipCaps: settings.relationshipCaps,
-        relationshipCriteria: settings.relationshipCriteria,
-        impactCriteria: settings.relationshipImpactCriteria,
-        memoryCriteria: settings.memoryCriteria,
-        admissionMode: settings.admissionMode,
-        currentTranscript,
-        fullScanMode: fullWindowScan,
-    });
+    const capture = !manual && !fullWindowScan && Number.isInteger(messageId)
+        ? takeNarrationCapture(scanChatKey, messageId, ctx.chat?.[messageId])
+        : null;
+    const scanLabel = capture ? 'narration-capture' : (manual ? 'manual' : (fullWindowScan ? 'automatic-full' : 'automatic'));
+    const prompt = capture ? '' : buildScannerPrompt(scannerPromptOptions(state, settings, transcript, { currentTranscript, fullScanMode: fullWindowScan }));
 
     let relationshipEdgeCount = 0;
     let relationshipEdgeFallbacks = 0;
     let profileUpdateCount = 0;
     try {
         const scanStartedAt = performance.now?.() ?? Date.now();
-        const { parsed, raw, retried } = await generateParsedNpcJson(ctx, {
+        const { parsed, raw, retried } = capture ? { ...capture, retried: false } : await generateParsedNpcJson(ctx, {
             systemPrompt: "You are NPC State Delta's isolated dossier scanner. Use only the supplied scanner payload. Return only the requested JSON object.",
             prompt,
             responseLength: fullWindowScan ? FULL_SCAN_RESPONSE_LENGTH : SCAN_RESPONSE_LENGTH,
             label: manual ? 'manual dossier scan' : (fullWindowScan ? 'automatic full dossier scan' : 'automatic dossier scan'),
             requestScope: operation.requestScope,
         });
+        if (capture) narrationCaptureStats.used += 1;
         let currentLineage = chatLineage(getContext().chat || []);
         if (!await scanCanonicalBaseCurrent(scanChatKey, operation, 'dossier scan')
             || !scanOperationCurrent(scanChatKey, operation) || getChatKey() !== scanChatKey
             || firstLineageDivergence(scanLineage, currentLineage) !== -1 || Number(stateVersions.get(scanChatKey) || 0) !== scanStateVersion) {
             const scanFinishedAt = performance.now?.() ?? Date.now();
             lastScanMetrics = {
-                label: manual ? 'manual' : (fullWindowScan ? 'automatic-full' : 'automatic'),
+                label: scanLabel,
                 durationMs: Math.max(0, Math.round(scanFinishedAt - scanStartedAt)),
                 promptChars: prompt.length,
                 responseChars: String(raw ?? '').length,
@@ -3742,7 +3816,7 @@ async function scanNow({ manual = false, messageId = null, allowDuringSwipe = fa
         );
         const scanFinishedAt = performance.now?.() ?? Date.now();
         lastScanMetrics = {
-            label: manual ? 'manual' : (fullWindowScan ? 'automatic-full' : 'automatic'),
+            label: scanLabel,
             durationMs: Math.max(0, Math.round(scanFinishedAt - scanStartedAt)),
             promptChars: prompt.length,
             responseChars: String(raw ?? '').length,
@@ -3995,6 +4069,7 @@ function buildSettingsHtml() {
     const scanning = [
         settingRow('npc_state_delta_scanner_connection_profile', 'Scanner connection profile', '<select id="npc_state_delta_scanner_connection_profile" class="text_pole"></select>', 'Routes every NPC scan, Refresh, focused pass and retry. Default keeps the current roleplay route; an unavailable profile never falls back silently.'),
         settingRow('npc_state_delta_full_scan_every_turn', 'Full scan every turn', '<input id="npc_state_delta_full_scan_every_turn" type="checkbox">', 'With Auto scan, reconcile the whole scan context after every reply instead of only the latest exchange. Overrides Scan every; relationship deltas still come only from the newest exchange.'),
+        settingRow('npc_state_delta_narration_capture', 'One-pass narration capture (experimental)', '<input id="npc_state_delta_narration_capture" type="checkbox">', 'With Auto scan, the roleplay model ends each reply with a hidden NPC update block that replaces the separate scan request. Adds about 2,000-3,000 tokens to every roleplay prompt plus the block to each reply; a missing or broken block falls back to the normal scan. Not used with Full scan every turn.'),
         settingsSlot('full-cast'),
         settingRow('npc_state_delta_scan_every', 'Scan every', numberControl('npc_state_delta_scan_every', 1, 20, 'replies'), 'Quick-scan cadence when Full scan every turn is off.'),
         settingRow('npc_state_delta_scan_depth', 'Scan context', numberControl('npc_state_delta_scan_depth', 2, 30, 'messages'), 'History window for full, manual and Refresh scans. Quick automatic scans read only the latest user + assistant exchange.'),
@@ -4177,6 +4252,7 @@ function syncSettingsControls() {
     $('#npc_state_delta_auto').prop('checked', !!s.autoScan);
     syncScannerProfileControl();
     $('#npc_state_delta_full_scan_every_turn').prop('checked', !!s.fullScanEveryTurn);
+    $('#npc_state_delta_narration_capture').prop('checked', !!s.narrationCapture);
     $('#npc_state_delta_scan_every').val(s.scanEvery);
     $('#npc_state_delta_scan_depth').val(s.scanDepth);
     $('#npc_state_delta_admission_mode').val(s.admissionMode);
@@ -6173,6 +6249,7 @@ function bindUi() {
         persistSettings();
     });
     bindSettingsCheckbox('#npc_state_delta_full_scan_every_turn', 'fullScanEveryTurn');
+    bindSettingsCheckbox('#npc_state_delta_narration_capture', 'narrationCapture');
     bindSettingsCheckbox('#npc_state_delta_inject', 'inject', updateInjection);
     bindSettingsNumber('#npc_state_delta_inject_budget', 'injectBudgetTokens', 512, 6000, 4000, updateInjection);
     bindSettingsCheckbox('#npc_state_delta_archive_deaths', 'autoArchiveDeaths');
@@ -6559,7 +6636,9 @@ async function handleAssistantMessageReceived(messageId, { bypassSwipeGuard = fa
     state.assistantSinceScan = Number(state.assistantSinceScan || 0) + 1;
     const shouldForceBranchScan = forceBranchRescan && settings.branchRescan !== false;
     const autoScanDue = settings.autoScan && (settings.fullScanEveryTurn || state.assistantSinceScan >= settings.scanEvery);
-    const scanExpected = shouldForceBranchScan || autoScanDue;
+    // A complete capture block is a scan already paid for, so it merges whatever Scan every says.
+    const captureDue = narrationCaptureEnabled(settings) && narrationCaptures.has(narrationCaptureKey(eventChatKey, messageId, eventMessage));
+    const scanExpected = shouldForceBranchScan || autoScanDue || captureDue;
     // Receipt state belongs to this assistant even if scanning fails, skips or is busy.
     // A successful scan coalesces its changes into this same owned boundary.
     commitBranchCheckpoint(state, messageId, 'turn');
@@ -6677,7 +6756,18 @@ function registerEvents() {
     if (events.GENERATION_AFTER_COMMANDS) {
         source.on(events.GENERATION_AFTER_COMMANDS, async (type, _options, dryRun) => {
             const key = getChatKey();
-            if (dryRun || type === 'quiet' || key === 'no-chat') return;
+            if (dryRun || key === 'no-chat') return;
+            // The capture block is asked for only in replies the roleplay model writes into the
+            // chat; quiet and impersonate generations never carry the instruction.
+            if (type === 'quiet') {
+                if (narrationCaptureArmed || lastInjection.captureChars) {
+                    narrationCaptureArmed = false;
+                    updateInjection();
+                }
+                return;
+            }
+            narrationCaptureArmed = type !== 'impersonate' && narrationCaptureEnabled();
+            if (narrationCaptureArmed) narrationCaptureStats.requested += 1;
             // Every roleplay generation revalidates the canonical dossier (a 304 when unchanged)
             // before its prompt is built: regenerate/swipe/continue, an empty Send, impersonate and
             // group member turns have no MESSAGE_SENT, and an ordinary send reuses this read there.
@@ -6691,6 +6781,11 @@ function registerEvents() {
     }
 
     if (events.MESSAGE_RECEIVED) {
+        // The capture block leaves the reply before any other listener (TTS, full cast, other
+        // extensions) or lineage key reads it.
+        const stripCapture = messageId => receiveNarrationBlock(messageId);
+        if (typeof source.makeFirst === 'function') source.makeFirst(events.MESSAGE_RECEIVED, stripCapture);
+        else source.on(events.MESSAGE_RECEIVED, stripCapture);
         source.on(events.MESSAGE_RECEIVED, async (messageId) => {
             await handleAssistantMessageReceived(messageId);
         });
@@ -6950,6 +7045,7 @@ window.NPCStateDelta = Object.freeze({
         scanBusyForChat: isScanBusy(getChatKey()),
         scanOperation: scanOperations.status(getChatKey()),
         scannerRouting: scannerRoutingMetrics(),
+        narrationCapture: { ...narrationCaptureStats, enabled: narrationCaptureEnabled(), armed: narrationCaptureArmed, pending: narrationCaptures.size },
         inlineEntries: chatHydrationStatus(getChatKey()) === 'ready' ? (getChatState().inlineCards?.length || 0) : 0,
         mountedInlineAnchors: document.querySelectorAll?.('.npc-state-delta-inline-anchor')?.length || 0,
         integratedMeguminBlocks: document.querySelectorAll?.('.npc-state-delta-megumin-pane')?.length || 0,

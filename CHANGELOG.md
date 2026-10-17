@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- New experimental **One-pass narration capture** setting under Scanning, off by default. With Auto scan on (and Full scan every turn off), the roleplay model ends each reply with a hidden NPC update block, which Delta removes from the message and merges through the same evidence checks instead of sending the separate scan request. It adds about 2,000-2,700 estimated tokens to every roleplay request, plus the block in each reply. A missing, broken or cut-off block, an edited reply or a reload falls back to the normal scan; focused relationship passes, Refresh and backfills still run as before. The block is kept only in memory and never saved or exported. Diagnostics shows the instruction size and how many replies were asked, used, missing, invalid or cut off. Not yet checked live: streaming display, the saved message after the host saves, and the effect on narration. With the setting off, prompts, requests and injection are unchanged.
+
 ## 1.1.7 - 17 October 2026
 
 - When the story mentions an NPC who isn't in the scene (off-screen, or archived after a long absence), the roleplay model now gets one short line of their established facts: role, home base, custom fields and how they feel about you. A returning NPC arrives as they left instead of being reinvented. Mention lines and the deceased lines share a cap of four per reply, living NPCs first, and never displace the NPCs in the scene.

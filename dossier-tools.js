@@ -180,8 +180,17 @@ function injectionPreviewHtml() {
     return `<section><h3>Roleplay injection (sent with each generation)</h3>
           <p class="${preview.sending ? '' : 'delta-tools-warning'}">${escapeHtml(summary)}</p>
           <small>${escapeHtml(preview.placement)}. Present NPCs: ${escapeHtml(preview.presentNpcs.join(', ') || 'none')}.${preview.namedByPlayer?.length ? ` Named in your latest message (sent for this reply only): ${escapeHtml(preview.namedByPlayer.join(', '))}.` : ''}${preview.builtAt ? ` Built ${escapeHtml(preview.builtAt)}.` : ''}</small>
+          ${narrationCaptureHtml(preview)}
           ${preview.sending ? `<pre>${escapeHtml(preview.text)}</pre>` : ''}
         </section>`;
+}
+
+// One-pass capture counters for this session; the instruction itself is not shown or exported.
+function narrationCaptureHtml(preview) {
+    const capture = api()?.uiStatus?.()?.narrationCapture;
+    if (!capture?.enabled) return '';
+    const size = preview.captureChars ? `last instruction ${preview.captureChars} chars (~${Math.ceil(preview.captureChars / 4)} tokens, estimate)` : 'instruction added at the next reply';
+    return `<p><small>${escapeHtml(`One-pass capture: ${size} · replies asked ${capture.requested} · used ${capture.used} · missing ${capture.missing} · invalid ${capture.invalid} · cut off ${capture.unterminated}.`)}</small></p>`;
 }
 
 function diagnosticsHtml(npc) {

@@ -62,7 +62,7 @@ The settings panel has a quick bar that is always visible, plus six groups.
 | Where | What you'll find |
 |---|---|
 | **Quick bar** | Enable, Auto scan, Open dossiers, Scan dossier now, Full scan current cast, Add NPC |
-| **Scanning** | Scanner connection profile, how often to scan, how much story to send, and how readily new NPCs get a dossier (Conservative, Balanced or Manual only) |
+| **Scanning** | Scanner connection profile, how often to scan, how much story to send, how readily new NPCs get a dossier (Conservative, Balanced or Manual only), and the experimental one-pass narration capture |
 | **Roster & continuity** | Present NPCs in chat (Full cards, Compact strip or Off), injection on/off and budget (a ceiling, default 4000 tokens), relationship map (on/off, default distance), custom fields, maximum active NPCs, death and return handling, stale NPC cleanup, rescan and middle-deletion rewind options |
 | **Calendar & birthdays** | Month names and lengths, optional era, optional campaign date |
 | **Portrait generation** | Style presets, positive and negative prompts, composition, prompt format |
@@ -70,6 +70,17 @@ The settings panel has a quick bar that is always visible, plus six groups.
 | **Data & maintenance** | Backup / Export, Restore / Import, Diagnostics, and clearing this chat's dossiers |
 
 Leave the scanner connection profile empty to use SillyTavern's current connection. If you pick a profile that isn't available, scanning fails visibly instead of silently switching.
+
+### One-pass narration capture (experimental)
+
+Off by default. **Scanning → One-pass narration capture** asks the roleplay model to end each reply with a hidden NPC update block. Delta removes the block from the message and uses it instead of the separate scan request for that reply.
+
+- **When it applies:** with Auto scan on and Full scan every turn off, for normal replies, swipes, regenerates and continues. Impersonate and background (quiet) generations never get the instruction.
+- **Cost:** every roleplay request grows by about 7,500-9,500 characters (roughly 2,000-2,700 tokens, estimated), plus the JSON block at the end of each reply. In return, a reply with a good block needs no scan request.
+- **Same checks as a scan:** the block goes through the same evidence checks as an ordinary scan, so it can only propose changes the story supports. It is used once, kept only in memory, and never saved, exported or shown in diagnostics.
+- **Fallback:** if the block is missing, broken or cut off, the reply was edited, or the page was reloaded first, the normal scan runs on its usual schedule. Focused relationship passes, Refresh and backfills still run as separate scanner requests.
+- **Scanner connection profile:** replies with a good block are scanned by your roleplay model; the scanner profile still handles everything else.
+- **Check it live before relying on it:** watch a reply while it streams (the block should stay hidden), reload the chat to confirm the saved message has no block, and compare narration quality and length with the setting off. **Data & maintenance → Diagnostics → Roleplay injection** shows the instruction's size and how many replies were asked, used, missing, invalid or cut off.
 
 ## How dossiers work
 
@@ -193,7 +204,7 @@ There are twelve categories:
 | A scan failed | Check the scanner connection profile in **Scanning**, then use **Scan dossier now**. |
 | NPCs contradict their dossier (appearance, voice, levers) | Check **Roster & continuity → Injection budget** is at least 4000 (the default). It's a ceiling: only what the present NPCs need is sent, and detailed dossiers arrive in full. |
 | An NPC walks back in and doesn't match her dossier | Name her in your message when you call her in; her dossier is then sent with that reply. If the story brings her in unprompted, the dossier arrives from the next reply, or swipe once she's marked present. |
-| An NPC's dossier doesn't seem to reach the story | Open **Data & maintenance → Diagnostics**. The **Roleplay injection** section shows exactly what is sent with each generation, or why nothing is (NPC not present, chat not loaded, injection off). |
+| An NPC's dossier doesn't seem to reach the story | Open **Data & maintenance → Diagnostics**. The **Roleplay injection** section shows exactly what is sent with each generation, or why nothing is (NPC not present, chat not loaded, injection off). With one-pass capture on, the capture instruction is added after it and shown only as a size. |
 | You want to know why a field didn't change | Open the dossier's diagnostics (**Show**) or export them from **Data & maintenance → Diagnostics**. Each field has an outcome such as `applied-refine`, `not-provided` or `waiting-for-revised-candidate`. |
 
 Diagnostics are bounded and read-only. They never store whole stories, full prompts or credentials, and their token counts are local estimates.
