@@ -1814,6 +1814,11 @@ export function buildScannerPrompt(options = {}) {
     const prompt = strengthenRoutineApparentAgeRule(continuity.buildScannerPrompt(calendarPromptOptions(options)));
     return appendCustomFieldRule(appendBirthdayRule(prompt, options), options);
 }
+// The one-pass capture instruction rides in the roleplay injection: the same scanner rules and
+// dossier context without a transcript (the roleplay model already sees the chat), plus a reminder.
+export function buildNarrationCapturePrompt(options = {}) {
+    return `${buildScannerPrompt({ ...options, fullScanMode: false, narrationCapture: true })}\n\n${mechanics.NARRATION_CAPTURE_REMINDER}`;
+}
 export function buildBackfillPrompt(options = {}) {
     return appendCustomFieldRule(appendBirthdayRule(continuity.buildBackfillPrompt(calendarPromptOptions(options)), options), options);
 }
@@ -1825,4 +1830,4 @@ export function buildProfileRefreshPrompt(options = {}) {
 }
 
 // NPC State Delta application version. Persisted bundle, branch, and data schemas are versioned independently.
-export const NPC_STATE_VERSION = '1.1.7';
+export const NPC_STATE_VERSION = '1.1.8';

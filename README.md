@@ -1,8 +1,8 @@
-# NPC State Delta v1.1.7
+# NPC State Delta v1.1.8
 
 A SillyTavern extension that keeps a living dossier for every NPC in your roleplay: who they are, how they look, how they talk and behave, what they remember, and how they feel about you. After each reply it scans the story, updates the dossiers carefully, and feeds the present NPCs back to the roleplay model so they stay in character.
 
-**Current release:** 1.1.7 · [Changelog](CHANGELOG.md) · [Development guide](DEVELOPMENT.md)
+**Current release:** 1.1.8 · [Changelog](CHANGELOG.md) · [Development guide](DEVELOPMENT.md)
 
 ---
 
@@ -42,7 +42,7 @@ A SillyTavern extension that keeps a living dossier for every NPC in your rolepl
 ## Install and update
 
 1. In SillyTavern, open **Extensions → Install extension** and paste this repository's URL.
-   Or unpack `npc_state_delta-1.1.7.zip` so that a single `npc_state_delta` folder contains `manifest.json` directly.
+   Or unpack `npc_state_delta-1.1.8.zip` so that a single `npc_state_delta` folder contains `manifest.json` directly.
 2. Reload SillyTavern.
 3. **Before updating an existing install,** export a backup from **Data & maintenance → Backup / Export**.
 
@@ -62,7 +62,7 @@ The settings panel has a quick bar that is always visible, plus six groups.
 | Where | What you'll find |
 |---|---|
 | **Quick bar** | Enable, Auto scan, Open dossiers, Scan dossier now, Full scan current cast, Add NPC |
-| **Scanning** | Scanner connection profile, how often to scan, how much story to send, and how readily new NPCs get a dossier (Conservative, Balanced or Manual only) |
+| **Scanning** | Scanner connection profile, how often to scan, how much story to send, how readily new NPCs get a dossier (Conservative, Balanced or Manual only), and the experimental one-pass narration capture |
 | **Roster & continuity** | Present NPCs in chat (Full cards, Compact strip or Off), injection on/off and budget (a ceiling, default 4000 tokens), relationship map (on/off, default distance), custom fields, maximum active NPCs, death and return handling, stale NPC cleanup, rescan and middle-deletion rewind options |
 | **Calendar & birthdays** | Month names and lengths, optional era, optional campaign date |
 | **Portrait generation** | Style presets, positive and negative prompts, composition, prompt format |
@@ -70,6 +70,18 @@ The settings panel has a quick bar that is always visible, plus six groups.
 | **Data & maintenance** | Backup / Export, Restore / Import, Diagnostics, and clearing this chat's dossiers |
 
 Leave the scanner connection profile empty to use SillyTavern's current connection. If you pick a profile that isn't available, scanning fails visibly instead of silently switching.
+
+### One-pass narration capture (experimental)
+
+Off by default. **Scanning → One-pass narration capture** asks the roleplay model to end each reply with a hidden NPC update block. Delta removes the block from the message and uses it instead of the separate scan request for that reply.
+
+- **When it applies:** with Auto scan on and Full scan every turn off, for new replies and continues. Swipes and regenerates use the normal scan, and impersonate and background (quiet) generations never get the instruction.
+- **Cost:** every asked-for reply's prompt grows by about 7,500-9,500 characters (roughly 2,000-2,700 tokens, estimated), plus the JSON block at the end of the reply. In return, a reply with a good block needs no scan request.
+- **Same checks as a scan:** the block goes through the same evidence checks as an ordinary scan, so it can only propose changes the story supports. It is used once, kept only in memory, and never saved, exported or shown in diagnostics.
+- **Fallback:** the normal scan runs on its usual schedule if the block is missing, broken or cut off, if the dossiers changed while the reply was being written (outdated), if the reply or an earlier message was edited, or if the page was reloaded first. Focused relationship passes, Refresh and backfills still run as separate scanner requests.
+- **Your story's own text is safe:** with the setting off, Delta removes only its own hidden `npc_state_delta` comment; JSON blocks and tags the story writes are left alone.
+- **Scanner connection profile:** replies with a good block are scanned by your roleplay model; the scanner profile still handles everything else.
+- **Check it live before relying on it:** watch a reply while it streams (the block should stay hidden), reload the chat to confirm the saved message has no block, and compare narration quality and length with the setting off. **Data & maintenance → Diagnostics → Roleplay injection** shows the instruction's size and how many replies were asked, used, missing, invalid, cut off or outdated.
 
 ## How dossiers work
 
@@ -193,7 +205,7 @@ There are twelve categories:
 | A scan failed | Check the scanner connection profile in **Scanning**, then use **Scan dossier now**. |
 | NPCs contradict their dossier (appearance, voice, levers) | Check **Roster & continuity → Injection budget** is at least 4000 (the default). It's a ceiling: only what the present NPCs need is sent, and detailed dossiers arrive in full. |
 | An NPC walks back in and doesn't match her dossier | Name her in your message when you call her in; her dossier is then sent with that reply. If the story brings her in unprompted, the dossier arrives from the next reply, or swipe once she's marked present. |
-| An NPC's dossier doesn't seem to reach the story | Open **Data & maintenance → Diagnostics**. The **Roleplay injection** section shows exactly what is sent with each generation, or why nothing is (NPC not present, chat not loaded, injection off). |
+| An NPC's dossier doesn't seem to reach the story | Open **Data & maintenance → Diagnostics**. The **Roleplay injection** section shows exactly what is sent with each generation, or why nothing is (NPC not present, chat not loaded, injection off). With one-pass capture on, the capture instruction is added after it and shown only as a size. |
 | You want to know why a field didn't change | Open the dossier's diagnostics (**Show**) or export them from **Data & maintenance → Diagnostics**. Each field has an outcome such as `applied-refine`, `not-provided` or `waiting-for-revised-candidate`. |
 
 Diagnostics are bounded and read-only. They never store whole stories, full prompts or credentials, and their token counts are local estimates.
@@ -207,12 +219,12 @@ npm test                        # unit, compatibility and synthetic-host tests
 npm run validate                # inventory, isolation, version and ownership checks
 npm run measure:prompts         # prompt size measurements
 node scripts/measure-stage9.mjs # prompt/request budget baseline
-npm run package                 # builds dist/npc_state_delta-1.1.7.zip and its SHA-256
+npm run package                 # builds dist/npc_state_delta-1.1.8.zip and its SHA-256
 git diff --check
 ```
 
 - `runtime-modules.json` is the single inventory of shipped modules. The package contains only the runtime modules, stylesheet, manifest, inventory, license and README.
-- Application version 1.1.7 is independent of the unchanged storage and bundle formats. Branch lineage remains v5, with guarded v4 compatibility.
+- Application version 1.1.8 is independent of the unchanged storage and bundle formats. Branch lineage remains v5, with guarded v4 compatibility.
 - Behaviour is governed by [AGENTS.md](AGENTS.md), [the core contract](docs/core-contract.md) and [the workplan](docs/WORKPLAN.md). Development commands, evidence and limits are in [DEVELOPMENT.md](DEVELOPMENT.md).
 - Historical reviews: [1.0.28](docs/v1.0.28-review.md), [1.0.27 prefix cache](docs/v1.0.27-review.md), [Stage 9](docs/stage9-review.md). Seed provenance is in `docs/seed-provenance.*`.
 

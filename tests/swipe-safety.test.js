@@ -17,5 +17,5 @@ test('swipe branch handling waits for SillyTavern swipe idle before dossier gene
     assert.match(index, /MESSAGE_RECEIVED while swipeState is still SWIPING[\s\S]*?queueSettledSwipeReconcile/, 'early MESSAGE_RECEIVED must be deferred');
     assert.match(index, /const reconciliation = await reconcileCurrentBranch\([\s\S]*?if \(reconciliation\?\.requiresRescan === false\) return;/, 'an exact known sibling must skip another LLM scan while a parent/root restore still rebuilds the new swipe');
     assert.match(index, /firstLineageDivergence\(scanLineage, currentLineage\) !== -1 \|\| Number\(stateVersions\.get\(scanChatKey\)[\s\S]*?stale result was discarded/, 'async scan results must be invalidated by either branch lineage or dossier-state changes');
-    assert.match(index, /const scanExpected = shouldForceBranchScan \|\| autoScanDue;[\s\S]*?commitBranchCheckpoint\(state, messageId, 'turn'\)/, 'assistant receipt must be checkpointed independently of whether its scan succeeds');
+    assert.match(index, /const scanExpected = shouldForceBranchScan \|\| autoScanDue \|\| captureDue;[\s\S]*?commitBranchCheckpoint\(state, messageId, 'turn'\)/, 'assistant receipt must be checkpointed independently of whether its scan succeeds');
 });
