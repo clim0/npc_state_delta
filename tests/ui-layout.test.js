@@ -30,13 +30,13 @@ test('present NPC pane uses portrait-first cards that open the launcher dossier'
     assert.match(css, /\.npc-state-delta-present-card-overlay\s*\{[^}]*position:\s*absolute[^}]*bottom:\s*0[^}]*background:\s*linear-gradient/s);
 });
 
-test('present NPCs in chat support Full, Compact and Off display modes', () => {
+test('present NPCs in chat support Full, Compact, Only in Story Block and Off display modes', () => {
     assert.match(index, /presentCastDisplay: 'full'/);
-    assert.match(index, /PRESENT_CAST_DISPLAY_MODES = Object\.freeze\(\['full', 'compact', 'off'\]\)/);
+    assert.match(index, /PRESENT_CAST_DISPLAY_MODES = Object\.freeze\(\['full', 'compact', 'storyblock', 'off'\]\)/);
     assert.match(index, /assign\('presentCastDisplay', normalizePresentCastDisplay\(settings\.presentCastDisplay\)\)/);
-    assert.match(index, /id="npc_state_delta_present_cast_display"[^>]*><option value="full">Full cards<\/option><option value="compact">Compact strip<\/option><option value="off">Off<\/option>/);
-    assert.match(index, /function inlineEntriesForRender\(state\) \{\s*\/\/[^\n]*\n\s*if \(presentCastDisplayMode\(\) === 'off'\) return \[\];/);
-    assert.match(index, /function startInlineWatchdog\(\) \{[\s\S]*?if \(presentCastDisplayMode\(\) === 'off'\) return stopInlineWatchdog\(\);/);
+    assert.match(index, /id="npc_state_delta_present_cast_display"[^>]*><option value="full">Full cards<\/option><option value="compact">Compact strip<\/option><option value="storyblock">Only in Story Block<\/option><option value="off">Off<\/option>/);
+    assert.match(index, /function inlineEntriesForRender\(state\) \{\s*\/\/[^\n]*\n\s*if \(inChatCastMode\(\) === 'off'\) return \[\];/);
+    assert.match(index, /function startInlineWatchdog\(\) \{[\s\S]*?if \(inChatCastMode\(\) === 'off'\) return stopInlineWatchdog\(\);/);
     assert.match(index, /class="npc-state-delta-present-chip"/);
     assert.match(css, /\.npc-state-delta-present-chips \{ display: flex;[^}]*overflow-x: auto;/);
 });

@@ -4118,7 +4118,7 @@ function buildSettingsHtml() {
     ].join('');
     const roster = `
         <h4 class="delta-settings-subhead">In-chat display</h4>
-        ${settingRow('npc_state_delta_present_cast_display', 'Present NPCs in chat', '<select id="npc_state_delta_present_cast_display" class="text_pole"><option value="full">Full cards</option><option value="compact">Compact strip</option><option value="off">Off</option></select>', 'Shown under the latest reply (or as a Megumin tab). Tapping an NPC opens its dossier. Off adds nothing to the chat; presence tracking and injection are unaffected.')}
+        ${settingRow('npc_state_delta_present_cast_display', 'Present NPCs in chat', '<select id="npc_state_delta_present_cast_display" class="text_pole"><option value="full">Full cards</option><option value="compact">Compact strip</option><option value="storyblock">Only in Story Block</option><option value="off">Off</option></select>', 'Shown under the latest reply (or as a Megumin tab). With Story Block installed, Present NPCs and Dossiers tabs also appear in its sidebar; Only in Story Block keeps the chat clear (full cards without Story Block). Tapping an NPC opens its dossier. Off adds nothing to the chat; presence tracking and injection are unaffected.')}
         <h4 class="delta-settings-subhead">Generation injection</h4>
         ${settingRow('npc_state_delta_inject', 'Inject present NPC state', '<input id="npc_state_delta_inject" type="checkbox">', 'Only active NPCs present in the latest scanned scene are injected into generation.')}
         ${settingRow('npc_state_delta_inject_budget', 'Injection budget', numberControl('npc_state_delta_inject_budget', 512, 6000, 'tokens', { step: 100, prefix: '<small>~</small>' }), 'Upper limit; only what the present NPCs need is used. The default 4000 lets detailed dossiers reach the roleplay model in full. When it runs short, lower-priority fields, then lower-ranked NPCs, are trimmed first.')}
@@ -4520,11 +4520,11 @@ function presentCastChipHtml(npc, messageId) {
     return `<button type="button" class="npc-state-delta-present-chip" data-npc-id="${escapeHtml(npc.id)}" data-message-id="${messageId}" aria-label="Open ${escapeHtml(displayName)} dossier"><span class="npc-state-delta-present-chip-portrait">${portrait}</span><span>${escapeHtml(displayName)}</span></button>`;
 }
 
-function inlineRosterHtml(cards, messageId) {
+function inlineRosterHtml(cards, messageId, mode = inChatCastMode()) {
     const currentById = new Map(getChatState().npcs.map(npc => [npc.id, npc]));
     const visible = (cards || []).map(card => currentById.get(card.id)).filter(npc => npc?.present && !npc.archived && !npc.minor);
     if (!visible.length) return '';
-    if (presentCastDisplayMode() === 'compact') {
+    if (mode === 'compact') {
         return `
       <section class="npc-state-delta-present-roster npc-state-delta-present-strip" data-message-id="${messageId}">
         <span class="npc-state-delta-kicker">PRESENT NPCS</span>
@@ -4566,7 +4566,7 @@ function messageElement(messageId) {
     return null;
 }
 
-const PRESENT_CAST_DISPLAY_MODES = Object.freeze(['full', 'compact', 'off']);
+const PRESENT_CAST_DISPLAY_MODES = Object.freeze(['full', 'compact', 'storyblock', 'off']);
 
 function normalizePresentCastDisplay(value) {
     return PRESENT_CAST_DISPLAY_MODES.includes(value) ? value : 'full';
@@ -4576,9 +4576,30 @@ function presentCastDisplayMode() {
     return normalizePresentCastDisplay(getSettings().presentCastDisplay);
 }
 
+// Set by story-block-tabs.js once its Present NPCs and Dossiers tabs are registered with Story Block.
+function storyBlockTabsActive() {
+    return document?.documentElement?.dataset?.npcStateDeltaStoryBlock === '1';
+}
+
+// What the chat itself shows. "Only in Story Block" hides the in-chat cast while the Story Block tab
+// carries it, and falls back to full cards when Story Block is not installed.
+function inChatCastMode() {
+    const mode = presentCastDisplayMode();
+    if (mode !== 'storyblock') return mode;
+    return storyBlockTabsActive() ? 'off' : 'full';
+}
+
+// The Story Block tab's cast: the live present NPCs as full cards, whatever the in-chat choice.
+function storyBlockCastHtml() {
+    const key = getChatKey();
+    if (key === 'no-chat' || chatHydrationStatus(key) !== 'ready') return '';
+    const present = getChatState(key).npcs.filter(npc => !npc.archived && npc.present && !npc.minor);
+    return inlineRosterHtml(present, latestMessageId(true), 'full');
+}
+
 function inlineEntriesForRender(state) {
     // Presentation only: Off renders nothing, while inlineCards history is still recorded below.
-    if (presentCastDisplayMode() === 'off') return [];
+    if (inChatCastMode() === 'off') return [];
     // Visible NPC State Delta is a live present-cast view, not a historical dossier timeline.
     // Keep inlineCards internally for branch/rollback safety, but render only the latest
     // assistant message and only NPCs physically present in the current merged state.
@@ -4602,7 +4623,9 @@ function meguminIntegrationMessageId(node) {
 }
 
 function meguminBlockCardForMessage(message) {
-    return message?.querySelector?.('.meg-blocks') || null;
+    const card = message?.querySelector?.('.meg-blocks') || null;
+    // Story Block's compatible card already carries Delta's own registered tab.
+    return card && storyBlockTabsActive() && card.classList?.contains?.('story-block-card') ? null : card;
 }
 
 function setClassActive(node, active) {
@@ -4803,7 +4826,7 @@ function stopInlineWatchdog() {
 
 function startInlineWatchdog() {
     // Off adds nothing to the chat, so nothing needs to watch host message redraws.
-    if (presentCastDisplayMode() === 'off') return stopInlineWatchdog();
+    if (inChatCastMode() === 'off') return stopInlineWatchdog();
     ensureInlineObserver();
     if (inlineWatchdogTimer || typeof setInterval !== 'function') return;
     inlineWatchdogTimer = setInterval(() => {
@@ -4821,7 +4844,7 @@ function renderInlineCards() {
     let chatKey;
     try { chatKey = getChatKey(); } catch { return { rendered: 0, missing: 0 }; }
     if (chatKey === 'no-chat' || chatHydrationStatus(chatKey) !== 'ready') return { rendered: 0, missing: 0 };
-    if (presentCastDisplayMode() !== 'off') ensureInlineObserver();
+    if (inChatCastMode() !== 'off') ensureInlineObserver();
 
     const state = getChatState(chatKey);
     const desiredEntries = inlineEntriesForRender(state).filter(entry => (entry.cards || []).length);
@@ -4875,6 +4898,7 @@ function renderInlineCards() {
         }
         rendered += 1;
     }
+    document.dispatchEvent?.(new CustomEvent('npc-state-delta:cast-rendered'));
     return { rendered, missing };
 }
 
@@ -7171,6 +7195,8 @@ window.NPCStateDelta = Object.freeze({
     },
     clearDiagnostics: () => diagnosticStore.clear(getChatKey()),
     getState: () => structuredClone(getChatState()),
+    presentCastHtml: () => storyBlockCastHtml(),
+    dossierRevision: () => `${getChatKey()}|${Number(stateVersions.get(getChatKey()) || 0)}`,
     getNpc: npcId => {
         const npc = getChatState().npcs.find(item => item.id === String(npcId || ''));
         return npc ? structuredClone(npc) : null;

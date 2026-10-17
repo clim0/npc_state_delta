@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.1.11 - 17 October 2026
+
+- With Story Block installed, Delta adds **Present NPCs** and **Dossiers** tabs to Story Block's sidebar and card, so the cast and every dossier sit beside your inventory and World State. The Dossiers tab has a search box (the dead appear only when searched for) and opens a dossier on tap. A new **Only in Story Block** choice under Present NPCs in chat keeps the chat clear and shows full cards when Story Block isn't installed. Display only: prompts, scans and saved data are unchanged, and nothing changes without Story Block.
+
 ## 1.1.10 - 17 October 2026
 
 - One-pass narration capture no longer deletes other extensions' hidden blocks. When the model wrote Delta's block before a Story Block envelope (`<!-- STORY_BLOCKS_V1 … -->`, which carries the inventory), Delta's block ran on to the envelope's closing `-->` and removed it with the inventory. Delta's block now ends at the next HTML comment at the latest, whichever order the model writes them in.

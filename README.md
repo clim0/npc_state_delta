@@ -1,8 +1,8 @@
-# NPC State Delta v1.1.10
+# NPC State Delta v1.1.11
 
 A SillyTavern extension that keeps a living dossier for every NPC in your roleplay: who they are, how they look, how they talk and behave, what they remember, and how they feel about you. After each reply it scans the story, updates the dossiers carefully, and feeds the present NPCs back to the roleplay model so they stay in character.
 
-**Current release:** 1.1.10 · [Changelog](CHANGELOG.md) · [Development guide](DEVELOPMENT.md)
+**Current release:** 1.1.11 · [Changelog](CHANGELOG.md) · [Development guide](DEVELOPMENT.md)
 
 ---
 
@@ -42,7 +42,7 @@ A SillyTavern extension that keeps a living dossier for every NPC in your rolepl
 ## Install and update
 
 1. In SillyTavern, open **Extensions → Install extension** and paste this repository's URL.
-   Or unpack `npc_state_delta-1.1.10.zip` so that a single `npc_state_delta` folder contains `manifest.json` directly.
+   Or unpack `npc_state_delta-1.1.11.zip` so that a single `npc_state_delta` folder contains `manifest.json` directly.
 2. Reload SillyTavern.
 3. **Before updating an existing install,** export a backup from **Data & maintenance → Backup / Export**.
 
@@ -63,13 +63,22 @@ The settings panel has a quick bar that is always visible, plus six groups.
 |---|---|
 | **Quick bar** | Enable, Auto scan, Open dossiers, Scan dossier now, Full scan current cast, Add NPC |
 | **Scanning** | Scanner connection profile, how often to scan, how much story to send, how readily new NPCs get a dossier (Conservative, Balanced or Manual only), and the experimental one-pass narration capture |
-| **Roster & continuity** | Present NPCs in chat (Full cards, Compact strip or Off), injection on/off and budget (a ceiling, default 4000 tokens), relationship map (on/off, default distance), custom fields, maximum active NPCs, death and return handling, stale NPC cleanup, rescan and middle-deletion rewind options |
+| **Roster & continuity** | Present NPCs in chat (Full cards, Compact strip, Only in Story Block or Off), injection on/off and budget (a ceiling, default 4000 tokens), relationship map (on/off, default distance), custom fields, maximum active NPCs, death and return handling, stale NPC cleanup, rescan and middle-deletion rewind options |
 | **Calendar & birthdays** | Month names and lengths, optional era, optional campaign date |
 | **Portrait generation** | Style presets, positive and negative prompts, composition, prompt format |
 | **Scanner rules** | Advanced: relationship starting values and per-scan caps, memory criteria, behaviour rubric |
 | **Data & maintenance** | Backup / Export, Restore / Import, Diagnostics, and clearing this chat's dossiers |
 
 Leave the scanner connection profile empty to use SillyTavern's current connection. If you pick a profile that isn't available, scanning fails visibly instead of silently switching.
+
+### Story Block tabs
+
+With [Story Block](https://github.com/kohz87/Story_block) installed, Delta adds two tabs to its sidebar and card, next to your inventory, World State and other blocks:
+
+- **👥 Present NPCs:** the same cards as in the chat, for whoever is present in the latest scene.
+- **📇 Dossiers:** every dossier with a search box. The dead stay out of the list until you search for them. Tap a row to open that dossier.
+
+Set **Roster & continuity → Present NPCs in chat** to **Only in Story Block** to show the cast only in Story Block; without Story Block that choice shows full cards in the chat. The tabs are display only and change nothing in prompts, scans or saved data. Without Story Block nothing changes.
 
 ### One-pass narration capture (experimental)
 
@@ -219,12 +228,12 @@ npm test                        # unit, compatibility and synthetic-host tests
 npm run validate                # inventory, isolation, version and ownership checks
 npm run measure:prompts         # prompt size measurements
 node scripts/measure-stage9.mjs # prompt/request budget baseline
-npm run package                 # builds dist/npc_state_delta-1.1.10.zip and its SHA-256
+npm run package                 # builds dist/npc_state_delta-1.1.11.zip and its SHA-256
 git diff --check
 ```
 
 - `runtime-modules.json` is the single inventory of shipped modules. The package contains only the runtime modules, stylesheet, manifest, inventory, license and README.
-- Application version 1.1.10 is independent of the unchanged storage and bundle formats. Branch lineage remains v5, with guarded v4 compatibility.
+- Application version 1.1.11 is independent of the unchanged storage and bundle formats. Branch lineage remains v5, with guarded v4 compatibility.
 - Behaviour is governed by [AGENTS.md](AGENTS.md), [the core contract](docs/core-contract.md) and [the workplan](docs/WORKPLAN.md). Development commands, evidence and limits are in [DEVELOPMENT.md](DEVELOPMENT.md).
 - Historical reviews: [1.0.28](docs/v1.0.28-review.md), [1.0.27 prefix cache](docs/v1.0.27-review.md), [Stage 9](docs/stage9-review.md). Seed provenance is in `docs/seed-provenance.*`.
 
