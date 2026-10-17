@@ -3991,11 +3991,39 @@ export function applyStaleNpcLifecycle(state = {}, options = {}) {
     return { state: next, archived, removed };
 }
 
-function candidateMatches(existing, incoming) {
+const GENERIC_PLACE_WORDS = new Set(['near', 'from', 'with', 'into', 'outside', 'inside', 'room', 'hall', 'house',
+    'street', 'road', 'square', 'market', 'tavern', 'city', 'town', 'village', 'district', 'quarter']);
+
+function placesOverlap(a, b) {
+    const left = normalizeName(a);
+    const right = normalizeName(b);
+    if (!left || !right) return false;
+    if (` ${left} `.includes(` ${right} `) || ` ${right} `.includes(` ${left} `)) return true;
+    const words = new Set(left.split(' ').filter(word => word.length >= 4 && !GENERIC_PLACE_WORDS.has(word)));
+    return right.split(' ').some(word => words.has(word));
+}
+
+// A shared role-description label ("Innkeeper", "the captain") fits many people, so on its own it
+// links a scan row to a properly named record only with continuity evidence: sameIndividual, the
+// record being present (before this scan reset presence), or an overlapping location/home base. A
+// record still named by a role keeps plain label matching so interim-identity promotion and name
+// reveals continue to work.
+function scanLabelsMatch(record, incoming, presentIds = new Set()) {
+    const incomingLabels = [incoming.name, ...(incoming.aliases || [])].filter(label => normalizeName(label));
+    const recordLabels = [record.name, ...(record.aliases || [])].filter(label => normalizeName(label));
+    const sharedKeys = new Set(recordLabels.map(normalizeName).filter(key => incomingLabels.some(label => normalizeName(label) === key)));
+    if (!sharedKeys.size) return false;
+    if (isInterimNpcLabel(record.name, record.identityKind) || isRoleDescriptionLabel(record.name)) return true;
+    // A label counts as a name when either side spells it as one ("Red" beside "red").
+    if ([...recordLabels, ...incomingLabels].some(label => sharedKeys.has(normalizeName(label)) && !isRoleDescriptionLabel(label))) return true;
+    if (incoming.sameIndividual === true || record.present === true || presentIds.has(record.id)) return true;
+    return [record.location, record.homeBase].some(place =>
+        [incoming.location, incoming.homeBase].some(other => placesOverlap(place, other)));
+}
+
+function candidateMatches(existing, incoming, presentIds) {
     if (incoming.id && incoming.id === existing.id) return true;
-    const incomingNames = new Set([incoming.name, ...(incoming.aliases || [])].map(normalizeName).filter(Boolean));
-    const existingNames = [existing.name, ...(existing.aliases || [])].map(normalizeName).filter(Boolean);
-    return existingNames.some(name => incomingNames.has(name));
+    return scanLabelsMatch(existing, incoming, presentIds);
 }
 
 function mergeLists(oldList, newList, limit = 8) {
@@ -5415,6 +5443,7 @@ export function mergeScanResult(state, scanResult, options = {}) {
         .map(normalizeNpcCandidate)
         .filter(Boolean);
     const expiredCandidates = normalizedCandidates.filter(candidate => turn - Number(candidate.lastSeenTurn || 0) > NPC_CANDIDATE_TTL_TURNS);
+    const presentBeforeScan = new Set((Array.isArray(state?.npcs) ? state.npcs : []).filter(n => n?.present).map(n => n.id));
     const next = {
         ...state,
         npcs: Array.isArray(state?.npcs) ? state.npcs.map(n => ({
@@ -5450,7 +5479,7 @@ export function mergeScanResult(state, scanResult, options = {}) {
             continue;
         }
 
-        if (existingIndex < 0) existingIndex = next.npcs.findIndex(existing => candidateMatches(existing, incoming));
+        if (existingIndex < 0) existingIndex = next.npcs.findIndex(existing => candidateMatches(existing, incoming, presentBeforeScan));
         if (existingIndex < 0) existingIndex = findInterimIdentityPromotionIndex(next.npcs, incoming);
         if (existingIndex >= 0) {
             const previousName = next.npcs[existingIndex].name;
@@ -5463,11 +5492,11 @@ export function mergeScanResult(state, scanResult, options = {}) {
             if (normalizeName(previousName) !== normalizeName(next.npcs[existingIndex].name)) {
                 report.renamed.push({ id: next.npcs[existingIndex].id, from: previousName, to: next.npcs[existingIndex].name });
             }
-            next.candidates = next.candidates.filter(candidate => !candidateRecordMatches(candidate, incoming));
+            next.candidates = next.candidates.filter(candidate => !scanLabelsMatch(candidate, incoming));
             continue;
         }
 
-        let candidateIndex = next.candidates.findIndex(candidate => candidateRecordMatches(candidate, incoming));
+        let candidateIndex = next.candidates.findIndex(candidate => scanLabelsMatch(candidate, incoming));
         if (candidateIndex < 0) candidateIndex = findInterimIdentityPromotionIndex(next.candidates, incoming);
         if (shouldCreateDossierImmediately(incoming, admissionMode)) {
             if (candidateIndex >= 0) {

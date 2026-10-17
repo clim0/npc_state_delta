@@ -285,7 +285,8 @@ test('recovers absolute relationship output when compact scanner omits relations
 test('matches alias to existing NPC instead of duplicating', () => {
     const npc = createNpcRecord('Luna');
     npc.aliases = ['Guild Receptionist'];
-    const result = mergeScanResult({ npcs: [npc], turn: 2 }, { npcs: [{ name: 'Guild Receptionist', role: 'Adventurers Guild receptionist' }] }, { maxNpcs: 6, turn: 2 });
+    // A role-description alias needs continuity evidence before it merges into a named dossier.
+    const result = mergeScanResult({ npcs: [npc], turn: 2 }, { npcs: [{ name: 'Guild Receptionist', role: 'Adventurers Guild receptionist', sameIndividual: true }] }, { maxNpcs: 6, turn: 2 });
     assert.equal(result.state.npcs.length, 1);
     assert.equal(result.state.npcs[0].role, 'Adventurers Guild receptionist');
 });
