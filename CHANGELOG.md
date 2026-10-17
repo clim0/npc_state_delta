@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.1.10 - 17 October 2026
+
+- One-pass narration capture no longer deletes other extensions' hidden blocks. When the model wrote Delta's block before a Story Block envelope (`<!-- STORY_BLOCKS_V1 … -->`, which carries the inventory), Delta's block ran on to the envelope's closing `-->` and removed it with the inventory. Delta's block now ends at the next HTML comment at the latest, whichever order the model writes them in.
+
 ## 1.1.9 - 17 October 2026
 
 - One-pass narration capture now works alongside extensions that rewrite a reply when it arrives (for example by wrapping their own blocks in a comment). Delta parsed the block but bound it to the exact reply text, so the rewrite made the scan miss it and fall back to a normal request. The block is now bound to the reply's position and the messages before it; editing, deleting or swiping still drops it. The diagnostics export now includes the capture counters, and Diagnostics shows how many blocks are waiting for their scan.

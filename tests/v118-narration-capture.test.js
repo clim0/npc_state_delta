@@ -191,3 +191,34 @@ test('the capture prompt is never a full-window prompt and keeps the custom-fiel
     assert.ok(withFields.indexOf(rule) < withFields.indexOf('Reminder: after the story'), 'the reminder stays last');
     assert.ok(!buildNarrationCapturePrompt(promptOptions()).includes('CUSTOM FIELDS'));
 });
+
+// A live 1.1.9 report: a Delta block placed before Story Block's comment envelope reached that
+// envelope's closing `-->` and deleted the inventory with it.
+test('v1.1.10 a capture block never swallows another extension\'s comment envelope', () => {
+    const envelope = '<!-- STORY_BLOCKS_V1\n<Blocks>\n<Inventory>\n[Gear]\nRope | 1 |\n</Inventory>\n</Blocks>\n-->';
+    const dice = '<!-- STORY_BLOCKS_V1\n<Dice>d20+10 vs DC 15</Dice>\n-->';
+    const block = '<!--npc_state_delta {"npcs":[]} -->';
+    for (const lenient of [false, true]) {
+        const before = extractNarrationCapture(`Story.\n${block}\n${envelope}`, { lenient });
+        assert.equal(before.status, 'found');
+        assert.equal(before.raw, '{"npcs":[]}');
+        assert.ok(before.text.endsWith(envelope), 'the envelope after the block is kept whole');
+        assert.ok(!before.text.includes('npc_state_delta'));
+
+        const after = extractNarrationCapture(`Story.\n${envelope}\n${block}`, { lenient });
+        assert.equal(after.text, `Story.\n${envelope}`);
+        assert.equal(after.raw, '{"npcs":[]}');
+
+        const unterminated = extractNarrationCapture(`Story.\n<!--npc_state_delta {"npcs":[]}\n${envelope}`, { lenient });
+        assert.equal(unterminated.status, 'unterminated', 'an unclosed block ends where the next comment begins');
+        assert.ok(unterminated.text.endsWith(envelope));
+
+        const between = extractNarrationCapture(`${dice}\nStory.\n${block}\n${envelope}`, { lenient });
+        assert.ok(between.text.startsWith(dice) && between.text.endsWith(envelope), 'envelopes on both sides survive');
+        assert.equal(between.raw, '{"npcs":[]}');
+    }
+    const arrow = extractNarrationCapture('Story.\n<!--npc_state_delta {"npcs":[{"note":"A --> B"}]} -->');
+    assert.equal(arrow.text, 'Story.', 'a closing arrow inside the JSON still cannot split a final block');
+    assert.deepEqual(parseNarrationCapture(arrow.raw).npcs, [{ note: 'A --> B' }]);
+    assert.equal(stripUiNoise(`Story. ${block} ${envelope}`), stripUiNoise(`Story. ${envelope}`), 'transcripts treat the envelope exactly as without the block');
+});
