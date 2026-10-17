@@ -817,6 +817,21 @@ const INTERIM_IDENTITY_WORDS = new Set([
     'human', 'elf', 'dwarf', 'orc', 'goblin', 'halfling', 'gnome', 'tiefling', 'traveler', 'drifter',
 ]);
 
+const LABEL_FILLER_WORDS = new Set(['the', 'a', 'an', 'of', 'and', 'from', 'at', 'in', 'on', 'that', 'this']);
+
+// A label that describes a role rather than naming one person ("Innkeeper", "the innkeeper",
+// "the old man", "Guard Captain"). Many people can fit it, so it never recalls a dossier and
+// never merges a new NPC into a named one on its own. A label with a capitalised non-role word
+// ("Red", "the Butcher of Vell", "Sister Callow") names someone.
+export function isRoleDescriptionLabel(label) {
+    const raw = String(label ?? '').trim();
+    if (!raw || !normalizeName(raw)) return false;
+    if (isInterimNpcLabel(raw)) return true;
+    const content = raw.split(/\s+/).map(word => word.replace(/[^\p{L}\p{N}'-]/gu, '')).filter(Boolean)
+        .filter(word => !LABEL_FILLER_WORDS.has(word.toLowerCase()));
+    return content.length > 0 && content.every(word => word === word.toLowerCase());
+}
+
 function isInterimNpcLabel(name, explicit = '') {
     const text = normalizeName(name);
     const tokens = text.split(/\s+/).filter(Boolean);
