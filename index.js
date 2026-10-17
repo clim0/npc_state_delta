@@ -3664,9 +3664,15 @@ function scannerPromptOptions(state, settings, transcript, extra = {}) {
 function narrationCaptureEnabled(settings = getSettings()) {
     return Boolean(settings.enabled && settings.narrationCapture && settings.autoScan && !settings.fullScanEveryTurn);
 }
-// Bound to the whole lineage up to the reply, so editing an earlier message also retires it.
+// Bound to the reply's position and the lineage before it, not to the reply's own text: other
+// extensions may rewrite a reply on arrival (wrapping their blocks, for example). Editing an earlier
+// message changes the key; editing, deleting or swiping a message drops every held capture.
 function narrationCaptureKey(chatKey, messageId) {
-    return `${chatKey}|${lineageCheckpointKey(chatLineage(getContext().chat || []), messageId)}`;
+    const parent = messageId > 0 ? lineageCheckpointKey(chatLineage(getContext().chat || []), messageId - 1) : 'root';
+    return `${chatKey}|${messageId}|${parent}`;
+}
+function dropNarrationCaptures() {
+    narrationCaptures.clear();
 }
 // The instruction describes the dossier as it was when the prompt was built; any dossier write
 // before the reply arrives (a finishing scan, a reconcile) makes the block outdated.
@@ -3717,6 +3723,7 @@ function receiveNarrationBlock(messageId) {
 }
 // Swiping to a stored sibling must not bring back a block another reply path left in it.
 function stripSwipedNarrationBlock(messageId) {
+    dropNarrationCaptures();
     const message = Number.isInteger(messageId) ? getContext().chat?.[messageId] : null;
     if (!getSettings().enabled || !message || message.is_user || message.is_system) return;
     const extracted = extractNarrationCapture(message.mes);
@@ -6844,6 +6851,7 @@ function registerEvents() {
 
     if (events.MESSAGE_DELETED) {
         source.on(events.MESSAGE_DELETED, (messageId) => {
+            dropNarrationCaptures();
             queueBranchReconcile({
                 explicitDivergence: Number.isInteger(messageId) ? messageId : null,
                 operation: 'delete',
@@ -6866,6 +6874,7 @@ function registerEvents() {
     }
     if (events.MESSAGE_SWIPE_DELETED) {
         source.on(events.MESSAGE_SWIPE_DELETED, (messageId) => {
+            dropNarrationCaptures();
             queueSettledSwipeReconcile({
                 explicitDivergence: Number.isInteger(messageId) ? messageId : null,
                 operation: 'swipe',
@@ -6876,6 +6885,7 @@ function registerEvents() {
     }
     if (events.MESSAGE_EDITED) {
         source.on(events.MESSAGE_EDITED, (messageId) => {
+            dropNarrationCaptures();
             queueBranchReconcile({
                 explicitDivergence: Number.isInteger(messageId) ? messageId : null,
                 operation: 'edit',
@@ -7155,6 +7165,8 @@ window.NPCStateDelta = Object.freeze({
             reconciliations: branchReconciliationEvents.filter(event => event.chatKey === key).slice(-20)
                 .map(({ chatKey, history, ...event }) => event),
         };
+        // Session counters only; the instruction and blocks themselves are never exported.
+        bundle.narrationCapture = { ...narrationCaptureStats, enabled: narrationCaptureEnabled(), pending: narrationCaptures.size };
         return bundle;
     },
     clearDiagnostics: () => diagnosticStore.clear(getChatKey()),

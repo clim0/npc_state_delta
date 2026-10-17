@@ -190,7 +190,7 @@ function narrationCaptureHtml(preview) {
     const capture = api()?.uiStatus?.()?.narrationCapture;
     if (!capture?.enabled) return '';
     const size = preview.captureChars ? `last instruction ${preview.captureChars} chars (~${Math.ceil(preview.captureChars / 4)} tokens, estimate)` : 'instruction added at the next reply';
-    return `<p><small>${escapeHtml(`One-pass capture: ${size} · replies asked ${capture.requested} · used ${capture.used} · missing ${capture.missing} · invalid ${capture.invalid} · cut off ${capture.unterminated} · outdated ${capture.outdated}.`)}</small></p>`;
+    return `<p><small>${escapeHtml(`One-pass capture: ${size} · replies asked ${capture.requested} · used ${capture.used} · missing ${capture.missing} · invalid ${capture.invalid} · cut off ${capture.unterminated} · outdated ${capture.outdated} · waiting ${capture.pending}.`)}</small></p>`;
 }
 
 function diagnosticsHtml(npc) {
