@@ -138,7 +138,9 @@ There are twelve categories:
 - A confirmed on-page death is final for automatic updates. Later scans cannot bring the NPC back.
 - If a death was recorded by mistake, open the dossier and use **Restore**. The correction is recorded.
 - With **Archive confirmed deaths** on (the default), dead NPCs are archived rather than deleted. They don't take roster slots and never get a full dossier in the roleplay prompt, but the scanner still recognises their name, so a later mention doesn't create a new, living duplicate.
-- When someone in the story talks about a confirmed-dead NPC, the roleplay model gets one short line about them (who they were and how they died) so it neither revives nor reinvents them. Up to three are sent per reply.
+- When the recent story mentions an NPC who isn't in the scene (off-screen, or archived after a long absence), the roleplay model gets one short line of their established facts, such as role, home base, custom fields and how they feel about you, so a returning NPC arrives as they left. The full dossier is sent once they're back in the scene.
+- When someone in the story talks about a confirmed-dead NPC, the roleplay model gets one short line about them (who they were and how they died) so it neither revives nor reinvents them. Mention lines are capped at four per reply, living NPCs first.
+- An NPC is recognised by their full name, an alias, or any distinctive part of their name ("Hask" or "Orrin" for "Capt. Orrin Hask"). Surnames, one-word nicknames and names that are everyday words ("Will") must be capitalised; titles such as "Capt." or "Dr." and role descriptions such as "the innkeeper" never recall anyone on their own.
 - The dossier list (**All · Active · Archived**) leaves the dead out. Search by name to find one; a dead dossier you open stays listed while it is selected.
 
 ### Portraits
@@ -157,7 +159,7 @@ There are twelve categories:
 
 ### Manual control
 
-- **Edit dossier** changes any field.
+- **Edit dossier** changes any field, including **Aliases / nicknames**. Distinctive nicknames help the extension recognise an NPC; role descriptions ("the innkeeper") are kept for reference only.
 - Tick **Protect edited stable profile fields** to stop scans from rewriting the fields you edited.
 - **Add NPC, Archive, Remove and Restore** are always manual.
 - Commands typed into the story text are never executed.
