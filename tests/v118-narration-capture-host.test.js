@@ -398,6 +398,26 @@ test('v1.1.8 with a host makeFirst the block is stripped before earlier-register
     }, { makeFirst: true });
 });
 
+test('v1.1.9 a capture survives another extension rewriting the reply on arrival', () => {
+    runScenario('rewritten-reply', async h => {
+        h.settings.narrationCapture = true;
+        // Another extension listening after the strip wraps its own blocks into a comment, so the
+        // reply text the scan reads differs from the text Delta stripped (a reported live case).
+        const wrapped = '\n\n<!-- STORY_BLOCKS_V1\n<Blocks>\n<CYOA>\n1. Go to the gate.\n</CYOA>\n</Blocks>\n-->';
+        const list = h.mockState.listeners.get('message_received');
+        list.splice(1, 0, id => { h.mockState.context.chat[id].mes += wrapped; });
+        const id = await h.turn('Who is at the gate?', `${h.REPLY}${h.block()}`);
+        h.equal(h.mockState.context.chat[id].mes, `${h.REPLY}${wrapped}`, 'the other extension rewrote the stripped reply');
+        h.equal(h.scannerCalls().length, 0, 'the capture is still used: no scanner request');
+        h.equal([h.status().used, h.status().pending], [1, 0]);
+        h.equal(h.npc('Yunyun')?.role, 'adventurer', 'the dossier comes from the block');
+        const exported = h.runtime.diagnosticBundle().narrationCapture;
+        h.equal([exported.requested, exported.used, exported.pending], [1, 1, 0], 'the diagnostics export carries the counters');
+        h.check(!JSON.stringify(exported).includes('Yunyun'), 'and no block content');
+
+    }, { makeFirst: true });
+});
+
 test('v1.1.8 tag and fence near-misses are accepted only from an armed reply; unarmed ones stay intact', () => {
     runScenario('lenient-forms', async h => {
         h.settings.narrationCapture = true;

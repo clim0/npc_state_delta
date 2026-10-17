@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- One-pass narration capture now works alongside extensions that rewrite a reply when it arrives (for example by wrapping their own blocks in a comment). Delta parsed the block but bound it to the exact reply text, so the rewrite made the scan miss it and fall back to a normal request. The block is now bound to the reply's position and the messages before it; editing, deleting or swiping still drops it. The diagnostics export now includes the capture counters, and Diagnostics shows how many blocks are waiting for their scan.
+
 ## 1.1.8 - 17 October 2026
 
 - New experimental **One-pass narration capture** setting under Scanning, off by default. With Auto scan on (and Full scan every turn off), new replies and continues ask the roleplay model to end with a hidden NPC update block, which Delta removes from the message and merges through the same evidence checks instead of sending the separate scan request. Swipes and regenerates use the normal scan. It adds about 2,000-2,700 estimated tokens to each asked-for prompt, plus the block in the reply. A missing, broken, cut-off or outdated block (the dossiers changed while the reply was written), an edit to the reply or an earlier message, or a reload falls back to the normal scan; focused relationship passes, Refresh and backfills still run as before. The block is kept only in memory and never saved or exported. Diagnostics shows the instruction size and how many replies were asked, used, missing, invalid, cut off or outdated. Not yet checked live: streaming display, the saved message after the host saves, and the effect on narration. With the setting off, prompts, requests and injection are unchanged, and the story's own JSON blocks and tags are never touched.
