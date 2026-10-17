@@ -863,6 +863,7 @@ class DeltaDossierUi {
                 <div class="delta-current-grid">
                     ${birthdayCard(selected)}
                     ${currentCard('Home Base / Usual Location', selected.homeBase, 'Unknown', changedMark(selected, 'homeBase'))}
+                    ${selected.aliases.length ? currentCard('Also known as', selected.aliases.join(' · '), '') : ''}
                     ${selected.customFields.map(([name, value]) => currentCard(name, value, '')).join('')}
                 </div>
             </section>

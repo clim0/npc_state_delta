@@ -285,7 +285,8 @@ test('recovers absolute relationship output when compact scanner omits relations
 test('matches alias to existing NPC instead of duplicating', () => {
     const npc = createNpcRecord('Luna');
     npc.aliases = ['Guild Receptionist'];
-    const result = mergeScanResult({ npcs: [npc], turn: 2 }, { npcs: [{ name: 'Guild Receptionist', role: 'Adventurers Guild receptionist' }] }, { maxNpcs: 6, turn: 2 });
+    // A role-description alias needs continuity evidence before it merges into a named dossier.
+    const result = mergeScanResult({ npcs: [npc], turn: 2 }, { npcs: [{ name: 'Guild Receptionist', role: 'Adventurers Guild receptionist', sameIndividual: true }] }, { maxNpcs: 6, turn: 2 });
     assert.equal(result.state.npcs.length, 1);
     assert.equal(result.state.npcs[0].role, 'Adventurers Guild receptionist');
 });
@@ -605,7 +606,10 @@ test('selects recently relevant NPCs but injection is strictly presence-gated', 
     assert.match(injection, /PLAYER RELATIONSHIP \(secondary modifier\):/);
     assert.doesNotMatch(injection, /Wiz:/);
     yunyun.present = false;
-    assert.equal(buildInjection([wiz, yunyun], 'Yunyun is mentioned off-screen.', 10, 3), '');
+    // Since 1.1.7 a mentioned absent NPC gets one reference line, never a dossier block.
+    const offScreen = buildInjection([wiz, yunyun], 'Yunyun is mentioned off-screen.', 10, 3);
+    assert.doesNotMatch(offScreen, /Yunyun: IDENTITY/);
+    assert.match(offScreen, /- Yunyun \(mentioned, not present/);
 });
 
 test('behavior guidance interprets combinations rather than raw numbers alone', () => {
@@ -1993,7 +1997,8 @@ test('manual archive preserves dossier, blocks injection, and auto-reactivates o
     assert.equal(archived.present, false);
     assert.equal(archived.background, 'Crimson Demon adventurer.');
     assert.equal(archived.relationship.trust, 64);
-    assert.equal(buildInjection([archived], 'Yunyun is mentioned.', 12, 3), '');
+    // Since 1.1.7 a mentioned absent NPC gets one reference line, never a dossier block.
+    assert.doesNotMatch(buildInjection([archived], 'Yunyun is mentioned.', 12, 3), /IDENTITY/);
 
     const returned = mergeScanResult({ npcs: [archived], turn: 13 }, { npcs: [{
         id: archived.id, name: 'Yunyun', present: true, lifeState: 'unknown', mood: 'back in town',
@@ -2069,7 +2074,8 @@ test('World State off-screen activity reactivates a manually archived NPC withou
     assert.equal(npc.present, false, 'World State must not imply physical scene presence');
     assert.equal(npc.worldActive, true);
     assert.equal(npc.location, 'Forest outside Axel');
-    assert.equal(buildInjection([npc], 'Yunyun is training outside Axel.', 21, 3), '', 'off-screen active NPCs must not be injected');
+    // Since 1.1.7 a mentioned absent NPC gets one reference line, never a dossier block.
+    assert.doesNotMatch(buildInjection([npc], 'Yunyun is training outside Axel.', 21, 3), /IDENTITY/, 'off-screen active NPCs get no dossier block');
 });
 
 test('death archive ignores off-screen activity until an explicit living return is established', () => {

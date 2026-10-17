@@ -18,7 +18,8 @@ function npc(name, extra = {}) {
 
 test('an off-screen NPC is only injected when the pending player message names her', () => {
     const linnea = npc('Linnea');
-    assert.equal(buildInjection([linnea], 'I call Linnea over to the table.', 6, 3), '', 'without the named option presence still gates injection');
+    // Since 1.1.7 a mention alone gives a reference line, never the dossier block.
+    assert.doesNotMatch(buildInjection([linnea], 'I call Linnea over to the table.', 6, 3), /IDENTITY/, 'without the named option presence still gates the dossier');
     const text = buildInjection([linnea], 'I call Linnea over to the table.', 6, 3, undefined, 4000, null, { namedNpcIds: [linnea.id] });
     assert.match(text, /^- Linnea \(named by player\): IDENTITY/m);
     assert.match(text, /Exception: NPCs marked "named by player" are not yet confirmed on-screen/);
@@ -36,14 +37,17 @@ test('present NPCs are unmarked and the header is unchanged when nobody is calle
 
 test('archived NPCs stay out even when named', () => {
     const archived = npc('Linnea', { archived: true });
-    assert.equal(buildInjection([archived], 'Where is Linnea?', 6, 3, undefined, 4000, null, { namedNpcIds: [archived.id] }), '');
+    const text = buildInjection([archived], 'Where is Linnea?', 6, 3, undefined, 4000, null, { namedNpcIds: [archived.id] });
+    assert.doesNotMatch(text, /IDENTITY|named by player/, 'an archived NPC never gets the dossier block');
+    assert.match(text, /- Linnea \(mentioned, not present/, 'since 1.1.7 it gets the reference line');
 });
 
 test('names, aliases and a distinctive first name are recognised; unrelated text is not', () => {
     const record = npc('Linnea Vael', { aliases: ['the miller\'s girl'] });
     assert.equal(npcNamedInText(record, 'I wave to Linnea Vael.'), true);
     assert.equal(npcNamedInText(record, 'Linnea, come here.'), true);
-    assert.equal(npcNamedInText(record, 'Is the miller\'s girl around?'), true);
+    // Since 1.1.7 a role description ("the miller's girl") is kept for reference but recalls nobody.
+    assert.equal(npcNamedInText(record, 'Is the miller\'s girl around?'), false);
     assert.equal(npcNamedInText(record, 'I head back to the inn alone.'), false);
     assert.equal(npcNamedInText(record, ''), false);
 });

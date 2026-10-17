@@ -175,7 +175,7 @@ function injectionPreviewHtml() {
     const preview = api()?.injectionPreview?.();
     if (!preview) return '';
     const summary = preview.sending
-        ? `Sending ${preview.injectedNpcs.length} NPC(s): ${preview.injectedNpcs.join(', ')} · ${preview.chars} chars (~${preview.estimatedTokens} of ${preview.budgetTokens} tokens, estimate)`
+        ? `Sending ${preview.injectedNpcs.length} NPC(s): ${preview.injectedNpcs.join(', ')}${preview.referencedNpcs?.length ? ` · mentioned only: ${preview.referencedNpcs.join(', ')}` : ''} · ${preview.chars} chars (~${preview.estimatedTokens} of ${preview.budgetTokens} tokens, estimate)`
         : `Nothing is being sent. ${preview.reason}`;
     return `<section><h3>Roleplay injection (sent with each generation)</h3>
           <p class="${preview.sending ? '' : 'delta-tools-warning'}">${escapeHtml(summary)}</p>

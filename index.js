@@ -2409,7 +2409,9 @@ function injectionPreview() {
     const settings = getSettings();
     const state = getChatKey() === 'no-chat' ? { npcs: [] } : getChatState();
     const text = String(lastInjection.text || '');
-    const injectedNpcs = text.split('\n').filter(line => line.startsWith('- ')).map(line => line.slice(2).split(':')[0].replace(/ \(named by player\)$/, ''));
+    const lines = text.split('\n');
+    const injectedNpcs = lines.map(line => line.match(/^- (.+?)(?: \(named by player\))?: IDENTITY/)?.[1]).filter(Boolean);
+    const referencedNpcs = lines.map(line => line.match(/^- (.+?) \((?:mentioned, not present|deceased)/)?.[1]).filter(Boolean);
     return {
         sending: Boolean(text),
         reason: lastInjection.reason || '',
@@ -2418,6 +2420,7 @@ function injectionPreview() {
         presentNpcs: (state.npcs || []).filter(npc => npc?.present && !npc?.archived).map(npc => npc.name),
         namedByPlayer: (lastInjection.namedByPlayer || []).filter(name => injectedNpcs.includes(name)),
         injectedNpcs,
+        referencedNpcs,
         chars: text.length,
         estimatedTokens: Math.ceil(text.length / 4),
         budgetTokens: Number(settings.injectBudgetTokens) || 0,
@@ -2779,6 +2782,7 @@ function syncOpenNpcEditorFields(npc) {
     const set = (id, value) => { const el = document.getElementById(id); if (el) el.value = value ?? ''; };
     set('npc_state_delta_edit_name', npc.name || '');
     set('npc_state_delta_edit_role', npc.role || '');
+    set('npc_state_delta_edit_aliases', (npc.aliases || []).join('\n'));
     set('npc_state_delta_edit_species', npc.species || '');
     set('npc_state_delta_edit_gender', npc.gender || '');
     set('npc_state_delta_edit_home_base', npc.homeBase || '');
@@ -5021,6 +5025,7 @@ function openNpcEditor(npcId) {
         <label>Species / Race<input id="npc_state_delta_edit_species" class="text_pole" maxlength="160" placeholder="Half-elf, dwarf, dwelf, human, custom species..." value="${editorValue(npc.species)}"></label>
         <label>Gender<select id="npc_state_delta_edit_gender" class="text_pole"><option value="" ${!npc.gender ? 'selected' : ''}>Unknown / not established</option><option value="male" ${npc.gender === 'male' ? 'selected' : ''}>Male</option><option value="female" ${npc.gender === 'female' ? 'selected' : ''}>Female</option></select></label>
         <label>Role<input id="npc_state_delta_edit_role" class="text_pole" value="${editorValue(npc.role)}"></label>
+        <label>Aliases / nicknames <small>One per line, max 8. Distinctive nicknames ("Red", "the Butcher of Vell") recall this NPC when mentioned; role descriptions ("the innkeeper") are kept for reference only.</small><textarea id="npc_state_delta_edit_aliases" class="text_pole" rows="2">${editorValue((npc.aliases || []).join('\n'))}</textarea></label>
         <label>Home Base / Usual Location<input id="npc_state_delta_edit_home_base" class="text_pole" maxlength="300" placeholder="Home, workplace, headquarters, or regular haunt" value="${editorValue(npc.homeBase)}"></label>
         ${customFieldEditorHtml(npc)}
         <label>Chronological age<input id="npc_state_delta_edit_age" class="text_pole" maxlength="80" placeholder="Actual stated age; leave blank if unknown" value="${editorValue(npc.age)}"></label>
@@ -5414,6 +5419,7 @@ async function saveNpcEditor(npcId, { close = true, silent = false, popup = null
         mannerisms: cleanEditorList(editorField('npc_state_delta_edit_mannerisms'), 8),
         keyRelationships: cleanEditorList(editorField('npc_state_delta_edit_key_relationships'), KEY_RELATIONSHIP_LIMIT),
         customFields: customFieldEditorValues(current),
+        aliases: cleanEditorList(editorField('npc_state_delta_edit_aliases'), 8),
     };
     const nameCollision = state.npcs.some((item, i) => i !== index && npcMatchesLabel(item, stableInputs.name));
     if (nameCollision) {
@@ -5421,8 +5427,9 @@ async function saveNpcEditor(npcId, { close = true, silent = false, popup = null
         return false;
     }
     if (stableInputs.name !== current.name && current.name) {
-        next.aliases = [...new Set([...(current.aliases || []), current.name])].slice(0, 8);
+        stableInputs.aliases = [...new Set([...stableInputs.aliases, current.name])].slice(0, 8);
     }
+    stableInputs.aliases = stableInputs.aliases.filter(alias => normalizeName(alias) !== normalizeName(stableInputs.name));
     Object.assign(next, stableInputs);
     const birthdayInput = String(editorField('npc_state_delta_edit_birthday')).trim().slice(0, 180);
     const currentBirthdayDisplay = String(current.birthDateDisplay || '').trim();
@@ -5481,11 +5488,11 @@ async function saveNpcEditor(npcId, { close = true, silent = false, popup = null
             turn: Number.isFinite(Number(state.turn)) ? Number(state.turn) : null,
         };
     }
-    const stableKeys = ['name', 'role', 'species', 'gender', 'homeBase', 'age', 'apparentAge', 'personality', 'speech', 'behaviorProfile', 'background', 'mannerisms', 'keyRelationships', 'customFields'];
+    const stableKeys = ['name', 'role', 'species', 'gender', 'homeBase', 'age', 'apparentAge', 'personality', 'speech', 'behaviorProfile', 'background', 'mannerisms', 'keyRelationships', 'customFields', 'aliases'];
     if (document.getElementById('npc_state_delta_edit_lock_profile')?.checked) {
         const locks = new Set(current.manualProfileFields || []);
         for (const key of stableKeys) {
-            const listField = key === 'mannerisms' || key === 'behaviorProfile' || key === 'keyRelationships';
+            const listField = key === 'mannerisms' || key === 'behaviorProfile' || key === 'keyRelationships' || key === 'aliases';
             const before = key === 'customFields' ? JSON.stringify(normalizeCustomFields(current.customFields))
                 : (listField ? JSON.stringify(current[key] || []) : String(current[key] || ''));
             const after = key === 'customFields' ? JSON.stringify(normalizeCustomFields(next.customFields))

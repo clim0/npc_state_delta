@@ -1,8 +1,8 @@
-# NPC State Delta v1.1.6
+# NPC State Delta v1.1.7
 
 A SillyTavern extension that keeps a living dossier for every NPC in your roleplay: who they are, how they look, how they talk and behave, what they remember, and how they feel about you. After each reply it scans the story, updates the dossiers carefully, and feeds the present NPCs back to the roleplay model so they stay in character.
 
-**Current release:** 1.1.6 · [Changelog](CHANGELOG.md) · [Development guide](DEVELOPMENT.md)
+**Current release:** 1.1.7 · [Changelog](CHANGELOG.md) · [Development guide](DEVELOPMENT.md)
 
 ---
 
@@ -42,7 +42,7 @@ A SillyTavern extension that keeps a living dossier for every NPC in your rolepl
 ## Install and update
 
 1. In SillyTavern, open **Extensions → Install extension** and paste this repository's URL.
-   Or unpack `npc_state_delta-1.1.6.zip` so that a single `npc_state_delta` folder contains `manifest.json` directly.
+   Or unpack `npc_state_delta-1.1.7.zip` so that a single `npc_state_delta` folder contains `manifest.json` directly.
 2. Reload SillyTavern.
 3. **Before updating an existing install,** export a backup from **Data & maintenance → Backup / Export**.
 
@@ -138,7 +138,10 @@ There are twelve categories:
 - A confirmed on-page death is final for automatic updates. Later scans cannot bring the NPC back.
 - If a death was recorded by mistake, open the dossier and use **Restore**. The correction is recorded.
 - With **Archive confirmed deaths** on (the default), dead NPCs are archived rather than deleted. They don't take roster slots and never get a full dossier in the roleplay prompt, but the scanner still recognises their name, so a later mention doesn't create a new, living duplicate.
-- When someone in the story talks about a confirmed-dead NPC, the roleplay model gets one short line about them (who they were and how they died) so it neither revives nor reinvents them. Up to three are sent per reply.
+- When the recent story mentions an NPC who isn't in the scene (off-screen, or archived after a long absence), the roleplay model gets one short line of their established facts, such as role, home base, custom fields and how they feel about you, so a returning NPC arrives as they left. The full dossier is sent once they're back in the scene.
+- When someone in the story talks about a confirmed-dead NPC, the roleplay model gets one short line about them (who they were and how they died) so it neither revives nor reinvents them. Mention lines are capped at four per reply, living NPCs first.
+- A new NPC who shares only a job title with someone you know (a different innkeeper in another town) gets their own dossier instead of overwriting the one you know.
+- An NPC is recognised by their full name, an alias, or any distinctive part of their name ("Hask" or "Orrin" for "Capt. Orrin Hask"). Surnames, one-word nicknames and names that are everyday words ("Will") must be capitalised; titles such as "Capt." or "Dr." and role descriptions such as "the innkeeper" never recall anyone on their own.
 - The dossier list (**All · Active · Archived**) leaves the dead out. Search by name to find one; a dead dossier you open stays listed while it is selected.
 
 ### Portraits
@@ -157,7 +160,7 @@ There are twelve categories:
 
 ### Manual control
 
-- **Edit dossier** changes any field.
+- **Edit dossier** changes any field, including **Aliases / nicknames**. Distinctive nicknames help the extension recognise an NPC; role descriptions ("the innkeeper") are kept for reference only.
 - Tick **Protect edited stable profile fields** to stop scans from rewriting the fields you edited.
 - **Add NPC, Archive, Remove and Restore** are always manual.
 - Commands typed into the story text are never executed.
@@ -204,12 +207,12 @@ npm test                        # unit, compatibility and synthetic-host tests
 npm run validate                # inventory, isolation, version and ownership checks
 npm run measure:prompts         # prompt size measurements
 node scripts/measure-stage9.mjs # prompt/request budget baseline
-npm run package                 # builds dist/npc_state_delta-1.1.6.zip and its SHA-256
+npm run package                 # builds dist/npc_state_delta-1.1.7.zip and its SHA-256
 git diff --check
 ```
 
 - `runtime-modules.json` is the single inventory of shipped modules. The package contains only the runtime modules, stylesheet, manifest, inventory, license and README.
-- Application version 1.1.6 is independent of the unchanged storage and bundle formats. Branch lineage remains v5, with guarded v4 compatibility.
+- Application version 1.1.7 is independent of the unchanged storage and bundle formats. Branch lineage remains v5, with guarded v4 compatibility.
 - Behaviour is governed by [AGENTS.md](AGENTS.md), [the core contract](docs/core-contract.md) and [the workplan](docs/WORKPLAN.md). Development commands, evidence and limits are in [DEVELOPMENT.md](DEVELOPMENT.md).
 - Historical reviews: [1.0.28](docs/v1.0.28-review.md), [1.0.27 prefix cache](docs/v1.0.27-review.md), [Stage 9](docs/stage9-review.md). Seed provenance is in `docs/seed-provenance.*`.
 

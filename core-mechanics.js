@@ -817,6 +817,21 @@ const INTERIM_IDENTITY_WORDS = new Set([
     'human', 'elf', 'dwarf', 'orc', 'goblin', 'halfling', 'gnome', 'tiefling', 'traveler', 'drifter',
 ]);
 
+const LABEL_FILLER_WORDS = new Set(['the', 'a', 'an', 'of', 'and', 'from', 'at', 'in', 'on', 'that', 'this']);
+
+// A label that describes a role rather than naming one person ("Innkeeper", "the innkeeper",
+// "the old man", "Guard Captain"). Many people can fit it, so it never recalls a dossier and
+// never merges a new NPC into a named one on its own. A label with a capitalised non-role word
+// ("Red", "the Butcher of Vell", "Sister Callow") names someone.
+export function isRoleDescriptionLabel(label) {
+    const raw = String(label ?? '').trim();
+    if (!raw || !normalizeName(raw)) return false;
+    if (isInterimNpcLabel(raw)) return true;
+    const content = raw.split(/\s+/).map(word => word.replace(/[^\p{L}\p{N}'-]/gu, '')).filter(Boolean)
+        .filter(word => !LABEL_FILLER_WORDS.has(word.toLowerCase()));
+    return content.length > 0 && content.every(word => word === word.toLowerCase());
+}
+
 function isInterimNpcLabel(name, explicit = '') {
     const text = normalizeName(name);
     const tokens = text.split(/\s+/).filter(Boolean);
@@ -3976,11 +3991,39 @@ export function applyStaleNpcLifecycle(state = {}, options = {}) {
     return { state: next, archived, removed };
 }
 
-function candidateMatches(existing, incoming) {
+const GENERIC_PLACE_WORDS = new Set(['near', 'from', 'with', 'into', 'outside', 'inside', 'room', 'hall', 'house',
+    'street', 'road', 'square', 'market', 'tavern', 'city', 'town', 'village', 'district', 'quarter']);
+
+function placesOverlap(a, b) {
+    const left = normalizeName(a);
+    const right = normalizeName(b);
+    if (!left || !right) return false;
+    if (` ${left} `.includes(` ${right} `) || ` ${right} `.includes(` ${left} `)) return true;
+    const words = new Set(left.split(' ').filter(word => word.length >= 4 && !GENERIC_PLACE_WORDS.has(word)));
+    return right.split(' ').some(word => words.has(word));
+}
+
+// A shared role-description label ("Innkeeper", "the captain") fits many people, so on its own it
+// links a scan row to a properly named record only with continuity evidence: sameIndividual, the
+// record being present (before this scan reset presence), or an overlapping location/home base. A
+// record still named by a role keeps plain label matching so interim-identity promotion and name
+// reveals continue to work.
+function scanLabelsMatch(record, incoming, presentIds = new Set()) {
+    const incomingLabels = [incoming.name, ...(incoming.aliases || [])].filter(label => normalizeName(label));
+    const recordLabels = [record.name, ...(record.aliases || [])].filter(label => normalizeName(label));
+    const sharedKeys = new Set(recordLabels.map(normalizeName).filter(key => incomingLabels.some(label => normalizeName(label) === key)));
+    if (!sharedKeys.size) return false;
+    if (isInterimNpcLabel(record.name, record.identityKind) || isRoleDescriptionLabel(record.name)) return true;
+    // A label counts as a name when either side spells it as one ("Red" beside "red").
+    if ([...recordLabels, ...incomingLabels].some(label => sharedKeys.has(normalizeName(label)) && !isRoleDescriptionLabel(label))) return true;
+    if (incoming.sameIndividual === true || record.present === true || presentIds.has(record.id)) return true;
+    return [record.location, record.homeBase].some(place =>
+        [incoming.location, incoming.homeBase].some(other => placesOverlap(place, other)));
+}
+
+function candidateMatches(existing, incoming, presentIds) {
     if (incoming.id && incoming.id === existing.id) return true;
-    const incomingNames = new Set([incoming.name, ...(incoming.aliases || [])].map(normalizeName).filter(Boolean));
-    const existingNames = [existing.name, ...(existing.aliases || [])].map(normalizeName).filter(Boolean);
-    return existingNames.some(name => incomingNames.has(name));
+    return scanLabelsMatch(existing, incoming, presentIds);
 }
 
 function mergeLists(oldList, newList, limit = 8) {
@@ -4257,7 +4300,8 @@ function applyIncoming(existing, incoming, turn, relationshipCaps = DEFAULT_RELA
     if (!manualFields.has('location') && incoming.locationState === 'clear' && !String(incoming.location || '').trim()) {
         merged.location = '';
     }
-    merged.aliases = mergeLists([...(existing.aliases || []), ...(promotedFromName ? [promotedFromName] : [])], incomingAliases, 8)
+    // Locked aliases (edited by hand) take no scanner additions; a revealed name still keeps the old label.
+    merged.aliases = mergeLists([...(existing.aliases || []), ...(promotedFromName ? [promotedFromName] : [])], manualFields.has('aliases') ? [] : incomingAliases, 8)
         .filter(alias => normalizeName(alias) !== normalizeName(merged.name));
     if (normalizeName(incomingName) === normalizeName(merged.name) && incoming.identityKind) {
         merged.identityKind = inferNpcIdentityKind(merged.name, incoming.identityKind);
@@ -5399,6 +5443,7 @@ export function mergeScanResult(state, scanResult, options = {}) {
         .map(normalizeNpcCandidate)
         .filter(Boolean);
     const expiredCandidates = normalizedCandidates.filter(candidate => turn - Number(candidate.lastSeenTurn || 0) > NPC_CANDIDATE_TTL_TURNS);
+    const presentBeforeScan = new Set((Array.isArray(state?.npcs) ? state.npcs : []).filter(n => n?.present).map(n => n.id));
     const next = {
         ...state,
         npcs: Array.isArray(state?.npcs) ? state.npcs.map(n => ({
@@ -5434,7 +5479,7 @@ export function mergeScanResult(state, scanResult, options = {}) {
             continue;
         }
 
-        if (existingIndex < 0) existingIndex = next.npcs.findIndex(existing => candidateMatches(existing, incoming));
+        if (existingIndex < 0) existingIndex = next.npcs.findIndex(existing => candidateMatches(existing, incoming, presentBeforeScan));
         if (existingIndex < 0) existingIndex = findInterimIdentityPromotionIndex(next.npcs, incoming);
         if (existingIndex >= 0) {
             const previousName = next.npcs[existingIndex].name;
@@ -5447,11 +5492,11 @@ export function mergeScanResult(state, scanResult, options = {}) {
             if (normalizeName(previousName) !== normalizeName(next.npcs[existingIndex].name)) {
                 report.renamed.push({ id: next.npcs[existingIndex].id, from: previousName, to: next.npcs[existingIndex].name });
             }
-            next.candidates = next.candidates.filter(candidate => !candidateRecordMatches(candidate, incoming));
+            next.candidates = next.candidates.filter(candidate => !scanLabelsMatch(candidate, incoming));
             continue;
         }
 
-        let candidateIndex = next.candidates.findIndex(candidate => candidateRecordMatches(candidate, incoming));
+        let candidateIndex = next.candidates.findIndex(candidate => scanLabelsMatch(candidate, incoming));
         if (candidateIndex < 0) candidateIndex = findInterimIdentityPromotionIndex(next.candidates, incoming);
         if (shouldCreateDossierImmediately(incoming, admissionMode)) {
             if (candidateIndex >= 0) {
@@ -5616,50 +5661,88 @@ export function scoreNpcRelevance(npc, text, turn = 0, socialGraph = null, allNp
     return score;
 }
 
-// Name/alias match used to bring an off-screen dossier into the next generation when the
-// player's pending message names that NPC. It never changes presence.
-// Titles and forms of address never identify one person on their own ("Lady", "Captain").
+// Name/alias match used to bring an off-screen dossier into the next generation when the recent
+// story names that NPC. It never changes presence.
+// Titles and forms of address never identify one person on their own ("Lady", "Captain", "Capt.").
 const NAME_TITLE_TOKENS = new Set([
     'lady', 'lord', 'sir', 'dame', 'madam', 'madame', 'mister', 'miss', 'mistress', 'master', 'captain',
     'commander', 'general', 'lieutenant', 'sergeant', 'major', 'colonel', 'admiral', 'doctor', 'professor',
     'father', 'mother', 'brother', 'sister', 'elder', 'king', 'queen', 'prince', 'princess', 'duke', 'duchess',
     'count', 'countess', 'baron', 'baroness', 'lady-in-waiting', 'saint', 'young', 'old', 'little', 'big',
+    'capt', 'lt', 'sgt', 'cpl', 'col', 'gen', 'adm', 'cmdr', 'dr', 'mr', 'mrs', 'ms', 'mx', 'prof', 'rev', 'st', 'sr', 'jr',
+    'of', 'the', 'von', 'van', 'de', 'del', 'della', 'der', 'den', 'du', 'la', 'le', 'al', 'bin', 'ibn',
+]);
+// Names that are also everyday words ("I will go"): matched only when written with a capital.
+const COMMON_WORD_NAMES = new Set([
+    'will', 'hope', 'grace', 'rose', 'mark', 'faith', 'joy', 'hunter', 'page', 'rich', 'bill', 'frank', 'sage', 'june',
+    'dawn', 'summer', 'iris', 'lily', 'ruby', 'pearl', 'amber', 'jade', 'stone', 'black', 'white', 'brown', 'green',
+    'wolf', 'bear', 'hawk', 'crow', 'raven', 'chase', 'drew', 'grant', 'honor', 'angel', 'star', 'rain', 'storm',
+    'river', 'lake', 'glen', 'dale', 'forest', 'wood', 'hill', 'field', 'ford', 'mason', 'cook', 'baker', 'smith',
+    'archer', 'fisher', 'miller', 'carter', 'cooper', 'porter', 'parker', 'taylor', 'sterling', 'rowan', 'ash',
 ]);
 
-// A first name alone ("Linnea" for "Linnea Vael") names the NPC only when no other dossier shares
-// that first word, and never when the word is a title. A full name or alias always counts.
+function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// True when `word` stands as a whole word in the raw text starting with a capital letter.
+function capitalisedWordIn(text, word) {
+    const re = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(word)}(?![\\p{L}\\p{N}])`, 'giu');
+    for (const match of String(text || '').matchAll(re)) {
+        const first = match[0].charAt(0);
+        if (first !== first.toLocaleLowerCase()) return true;
+    }
+    return false;
+}
+
+// A full name or alias always counts (a one-word alias only when capitalised); role descriptions
+// ("the innkeeper") never count. Any other word of the name ("Hask" or "Orrin" for "Capt. Orrin
+// Hask") counts when it has 4+ letters, is not a title, no other dossier's label carries it, and
+// it is written with a capital (a first name may be lower-case unless it is an everyday word).
 export function npcNamedInText(npc, text, roster = []) {
     const haystack = normalizeName(text);
     if (!haystack || !npc?.name) return false;
     const others = (Array.isArray(roster) ? roster : []).filter(other => other && other !== npc && other.id !== npc.id);
     const otherLabels = others.flatMap(other => [other.name, ...(other.aliases || [])]).map(normalizeName).filter(Boolean);
-    for (const label of [npc.name, ...(npc.aliases || [])]) {
+    const labels = [npc.name, ...(npc.aliases || [])].filter(label => label && !isRoleDescriptionLabel(label));
+    for (const label of labels) {
         const needle = normalizeName(label);
         if (!needle || countNormalizedPhrase(haystack, needle) === 0) continue;
         // A label another dossier also carries ("Tomas") names nobody on its own, and a label
         // found only inside another dossier's longer name ("Mira" in "Lady Mira") is theirs.
         if (otherLabels.includes(needle)) continue;
+        if (!needle.includes(' ') && label !== npc.name && !capitalisedWordIn(text, needle)) continue;
         // Mask every span of those longer labels (longest first, so overlapping labels such as
         // "Lady Mira Valen" and "Mira Valen" consume one span), then look for an independent mention.
         const masked = otherLabels
             .filter(other => other.length > needle.length && countNormalizedPhrase(other, needle) > 0)
             .sort((a, b) => b.length - a.length)
-            .reduce((textSoFar, other) => textSoFar.replace(new RegExp(`(?<=^|\\s)${other.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\s|$)`, 'gu'), '#'), haystack);
+            .reduce((textSoFar, other) => textSoFar.replace(new RegExp(`(?<=^|\\s)${escapeRegExp(other)}(?=\\s|$)`, 'gu'), '#'), haystack);
         if (countNormalizedPhrase(masked, needle) === 0) continue;
         return true;
     }
+    if (isRoleDescriptionLabel(npc.name)) return false;
     const tokens = normalizeName(npc.name).split(/\s+/).filter(Boolean);
-    const first = tokens[0] || '';
-    if (tokens.length < 2 || first.length < 4 || NAME_TITLE_TOKENS.has(first)) return false;
-    // A first name another dossier's label also starts with is ambiguous, and an occurrence inside
-    // another dossier's named span ("Mira" in "Lady Mira Valen") is theirs.
-    const sharedFirst = otherLabels.some(label => label.split(/\s+/)[0] === first);
-    if (sharedFirst) return false;
-    const masked = otherLabels
-        .filter(other => other.length > first.length)
-        .sort((a, b) => b.length - a.length)
-        .reduce((textSoFar, other) => textSoFar.replace(new RegExp(`(?<=^|\\s)${other.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\s|$)`, 'gu'), '#'), haystack);
-    return countNormalizedPhrase(masked, first) > 0;
+    if (tokens.length < 2) return false;
+    const firstPart = tokens.find(token => !NAME_TITLE_TOKENS.has(token)) || '';
+    const otherTokens = new Set(otherLabels.flatMap(label => label.split(/\s+/)));
+    for (const token of tokens) {
+        if (token.length < 4 || NAME_TITLE_TOKENS.has(token)) continue;
+        if (token === firstPart) {
+            // A first name another dossier's label also starts with is ambiguous, and an occurrence
+            // inside another dossier's named span ("Mira" in "Lady Mira Valen") is theirs.
+            if (otherLabels.some(label => label.split(/\s+/)[0] === token)) continue;
+            const masked = otherLabels
+                .filter(other => other.length > token.length && countNormalizedPhrase(other, token) > 0)
+                .sort((a, b) => b.length - a.length)
+                .reduce((textSoFar, other) => textSoFar.replace(new RegExp(`(?<=^|\\s)${escapeRegExp(other)}(?=\\s|$)`, 'gu'), '#'), haystack);
+            if (countNormalizedPhrase(masked, token) > 0 && (!COMMON_WORD_NAMES.has(token) || capitalisedWordIn(text, token))) return true;
+            continue;
+        }
+        // Any other part (a surname) must be unique to this NPC and written with a capital.
+        if (!otherTokens.has(token) && capitalisedWordIn(text, token)) return true;
+    }
+    return false;
 }
 
 export function selectRelevantNpcs(npcs, text, turn = 0, limit = 3, socialGraph = null, graphRegistry = null) {
@@ -5879,27 +5962,36 @@ function compactInjectionBehaviorRubric(criteria, maxChars) {
     return truncateInjectionText(raw, maxChars);
 }
 
-const DECEASED_REFERENCE_LIMIT = 3;
-const DECEASED_REFERENCE_CHARS = 220;
+const REFERENCE_LINE_LIMIT = 4;
+const REFERENCE_LINE_CHARS = 240;
+const MENTIONED_HEADER = 'MENTIONED, NOT PRESENT: NPCs the recent story names. Use these established facts if they come up or arrive; do not bring them on-screen unprompted.';
+const DECEASED_HEADER = 'DECEASED, REFERENCED ONLY: these NPCs are dead and only mentioned. Use these facts; never portray them alive, present, or speaking.';
 
-// A confirmed-dead NPC named in the recent story gets one compact ledger line (who they were and how
-// they died) so the roleplay model neither revives nor reinvents them. The dossier is not sent.
-function deceasedReferenceLines(npcs = [], text = '') {
+// NPCs the recent story names who are not in the injected cast get one compact line each: a living
+// off-screen (or archived) NPC its established facts, a confirmed-dead NPC who they were and how they
+// died. At most four, living first; never a dossier block.
+function referenceBlock(npcs = [], text = '', castIds = new Set(), customFieldNames = []) {
     const roster = Array.isArray(npcs) ? npcs : [];
     const haystack = normalizeName(text);
-    if (!haystack) return [];
-    // Cheap pre-check before the full roster-aware match: a late game can hold hundreds of dead.
+    if (!haystack) return '';
+    // Cheap pre-check before the full roster-aware match: a late game can hold hundreds of NPCs.
     const mayBeNamed = npc => [npc.name, ...(npc.aliases || [])]
-        .some(label => { const first = normalizeName(label).split(/\s+/)[0]; return first && haystack.includes(first); });
-    return roster
-        .filter(npc => npc?.name && isTerminalNpcDeath(npc) && mayBeNamed(npc) && npcNamedInText(npc, text, roster))
-        .slice(0, DECEASED_REFERENCE_LIMIT)
-        .map(npc => {
-            const bond = cleanText(String(cleanList(npc.keyRelationships, 1, 160)[0] || '').split('|')[0], 90);
-            const facts = [normalizeGender(npc.gender), cleanText(npc.role, 70), bond && `bond: ${bond}`].filter(Boolean);
-            const death = cleanText(npc.lifeStateReason, 140);
-            return truncateInjectionText(`- ${npc.name} (deceased${facts.length ? `; ${facts.join('; ')}` : ''})${death ? `: ${death}` : ''}`, DECEASED_REFERENCE_CHARS);
-        });
+        .some(label => normalizeName(label).split(/\s+/).some(token => token.length >= 3 && haystack.includes(token)));
+    const named = roster.filter(npc => npc?.name && !castIds.has(npc.id) && !npc.present && mayBeNamed(npc) && npcNamedInText(npc, text, roster));
+    const bondOf = npc => cleanText(String(cleanList(npc.keyRelationships, 1, 160)[0] || '').split('|')[0], 90);
+    const mentioned = named.filter(npc => !isTerminalNpcDeath(npc)).slice(0, REFERENCE_LINE_LIMIT).map(npc => {
+        const custom = Object.entries(customFieldValues(npc, customFieldNames)).map(([name, value]) => `${name}: ${value}`).join(' · ');
+        const facts = [normalizeGender(npc.gender), cleanText(npc.role, 70), npc.homeBase && `home base: ${cleanText(npc.homeBase, 60)}`,
+            custom, npc.relationshipSummary && `toward the player: ${cleanText(npc.relationshipSummary, 90)}`].filter(Boolean);
+        return truncateInjectionText(`- ${npc.name} (${['mentioned, not present', ...facts].join('; ')})`, REFERENCE_LINE_CHARS);
+    });
+    const deceased = named.filter(npc => isTerminalNpcDeath(npc)).slice(0, Math.min(3, REFERENCE_LINE_LIMIT - mentioned.length)).map(npc => {
+        const bond = bondOf(npc);
+        const facts = [normalizeGender(npc.gender), cleanText(npc.role, 70), bond && `bond: ${bond}`].filter(Boolean);
+        const death = cleanText(npc.lifeStateReason, 140);
+        return truncateInjectionText(`- ${npc.name} (deceased${facts.length ? `; ${facts.join('; ')}` : ''})${death ? `: ${death}` : ''}`, REFERENCE_LINE_CHARS);
+    });
+    return [mentioned.length && MENTIONED_HEADER, ...mentioned, deceased.length && DECEASED_HEADER, ...deceased].filter(Boolean).join('\n');
 }
 
 export function buildInjection(npcs, text, turn = 0, limit = 3, behaviorCriteria = DEFAULT_BEHAVIOR_CRITERIA, budgetTokens = DEFAULT_INJECTION_BUDGET_TOKENS, socialGraph = null, { includeAppearance = false, namedNpcIds = [], customFieldNames = [] } = {}) {
@@ -5907,12 +5999,11 @@ export function buildInjection(npcs, text, turn = 0, limit = 3, behaviorCriteria
     const calledIn = npc => !npc?.present && named.has(npc?.id);
     const present = (npcs || []).filter(npc => (Boolean(npc?.present) || calledIn(npc)) && !npc?.archived);
     let relevant = selectRelevantNpcs(present, text, turn, limit, socialGraph, npcs || []);
-    const deceased = deceasedReferenceLines(npcs || [], text);
-    const deceasedHeader = 'DECEASED, REFERENCED ONLY: these NPCs are dead and only mentioned. Use these facts; never portray them alive, present, or speaking.';
     const budget = normalizeInjectionBudgetTokens(budgetTokens);
     const budgetChars = budget * APPROX_CHARS_PER_TOKEN;
     if (!relevant.length) {
-        return deceased.length ? truncateInjectionText(['NPC STATE DELTA DOSSIER. Treat these as established story facts; never mention the dossier.', deceasedHeader, ...deceased].join('\n'), budgetChars) : '';
+        const references = referenceBlock(npcs || [], text, new Set(), customFieldNames);
+        return references ? truncateInjectionText(['NPC STATE DELTA DOSSIER. Treat these as established story facts; never mention the dossier.', references].join('\n'), budgetChars) : '';
     }
     const headerFor = () => [
         'NPC STATE DELTA DOSSIER. Only confirmed-present NPCs are included. Treat these as established story facts; never mention the dossier or numeric values.',
@@ -5923,7 +6014,7 @@ export function buildInjection(npcs, text, turn = 0, limit = 3, behaviorCriteria
         relevant.some(lowPlayerStanding) && 'LOW SCORES: the player is not uniquely important; no obligation, fixation, or "only them" thinking.',
         relevant.some(calledIn) && 'Exception: NPCs marked "named by player" are not yet confirmed on-screen; use their dossier if they appear.',
     ].filter(Boolean).join('\n');
-    const deceasedBlock = deceased.length ? [deceasedHeader, ...deceased].join('\n') : '';
+
     let header = headerFor();
 
     // Identity and agency are structural, not optional enrichment. Drop lower-ranked NPCs before
@@ -5975,13 +6066,14 @@ export function buildInjection(npcs, text, turn = 0, limit = 3, behaviorCriteria
         }
     }
 
-    // Deceased references outrank optional enrichment but never the present NPCs' essentials.
-    let deceasedText = '';
-    if (deceasedBlock) {
+    // Mentioned and deceased references outrank optional enrichment but never the injected cast's
+    // essentials; NPCs dropped from the cast for budget may still get their one line.
+    const referenceText = (() => {
+        const block = referenceBlock(npcs || [], text, new Set(relevant.map(npc => npc.id)), customFieldNames);
         const room = budgetChars - currentLength - 1;
-        deceasedText = room >= 80 ? truncateInjectionText(deceasedBlock, room) : '';
-        if (deceasedText) currentLength += deceasedText.length + 1;
-    }
+        return block && room >= 80 ? truncateInjectionText(block, room) : '';
+    })();
+    if (referenceText) currentLength += referenceText.length + 1;
 
     // Optional continuity then fills remaining room round-robin so one verbose dossier cannot
     // starve another. Relationship summary is deliberately late: live identity/state already won priority.
@@ -6021,7 +6113,7 @@ export function buildInjection(npcs, text, turn = 0, limit = 3, behaviorCriteria
 
     // Rebuild with enriched NPC lines while preserving rubric placement.
     const rubricLine = lines.find(line => line.startsWith('RELATIONSHIP-TO-BEHAVIOR RUBRIC:')) || '';
-    const finalLines = [header, ...enriched, deceasedText, rubricLine].filter(Boolean);
+    const finalLines = [header, ...enriched, referenceText, rubricLine].filter(Boolean);
     return truncateInjectionText(finalLines.join('\n'), budgetChars);
 }
 
