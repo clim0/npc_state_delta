@@ -19,46 +19,81 @@ test('extraction strips the comment form and keeps its body as raw', () => {
     assert.deepEqual(result, { text: STORY, raw: BLOCK_JSON, status: 'found' });
 });
 
-test('extraction strips the tagged form, including attributes on the opening tag', () => {
-    const result = extractNarrationCapture(`${STORY}\n<npc_state_delta version="1">\n${BLOCK_JSON}\n</npc_state_delta>\n`);
-    assert.deepEqual(result, { text: STORY, raw: BLOCK_JSON, status: 'found' });
+test('the tagged form is stripped only in lenient mode', () => {
+    const text = `${STORY}\n<npc_state_delta version="1">\n${BLOCK_JSON}\n</npc_state_delta>\n`;
+    assert.deepEqual(extractNarrationCapture(text, { lenient: true }), { text: STORY, raw: BLOCK_JSON, status: 'found' });
+    assert.deepEqual(extractNarrationCapture(text), { text, raw: '', status: 'none' }, 'strict mode leaves the tag form untouched');
 });
 
-test('extraction strips a trailing ```json fence that opens with {"npcs"', () => {
-    const fenced = extractNarrationCapture(`${STORY}\n\n\`\`\`json\n${BLOCK_JSON}\n\`\`\`\n  `);
-    assert.deepEqual(fenced, { text: STORY, raw: BLOCK_JSON, status: 'found' });
-    const bare = extractNarrationCapture(`${STORY}\n\`\`\`\n${BLOCK_JSON}\n\`\`\``);
+test('a trailing ```json fence that opens with {"npcs" is stripped only in lenient mode', () => {
+    const fencedText = `${STORY}\n\n\`\`\`json\n${BLOCK_JSON}\n\`\`\`\n  `;
+    assert.deepEqual(extractNarrationCapture(fencedText, { lenient: true }), { text: STORY, raw: BLOCK_JSON, status: 'found' });
+    assert.deepEqual(extractNarrationCapture(fencedText), { text: fencedText, raw: '', status: 'none' }, 'strict mode leaves a fence untouched');
+    const bare = extractNarrationCapture(`${STORY}\n\`\`\`\n${BLOCK_JSON}\n\`\`\``, { lenient: true });
     assert.deepEqual(bare, { text: STORY, raw: BLOCK_JSON, status: 'found' }, 'the language tag is optional');
 });
 
 test('a fence that is not trailing, or is not an npcs object, stays in the story', () => {
     const midStory = `${STORY}\n\`\`\`json\n${BLOCK_JSON}\n\`\`\`\nShe laughs afterwards.`;
-    assert.equal(extractNarrationCapture(midStory).status, 'none');
-    assert.equal(extractNarrationCapture(midStory).text, midStory);
+    assert.equal(extractNarrationCapture(midStory, { lenient: true }).status, 'none');
+    assert.equal(extractNarrationCapture(midStory, { lenient: true }).text, midStory);
     const otherJson = `${STORY}\n\`\`\`json\n{"spell":"Explosion"}\n\`\`\``;
-    assert.equal(extractNarrationCapture(otherJson).status, 'none');
-    assert.equal(extractNarrationCapture(otherJson).text, otherJson);
+    assert.equal(extractNarrationCapture(otherJson, { lenient: true }).status, 'none');
+    assert.equal(extractNarrationCapture(otherJson, { lenient: true }).text, otherJson);
 });
 
-test('an unterminated comment or tag at the end of the text is stripped with status unterminated', () => {
-    const comment = extractNarrationCapture(`${STORY}\n<!--npc_state_delta\n{"npcs":[{"name":"Yun`);
-    assert.equal(comment.status, 'unterminated');
-    assert.equal(comment.text, STORY);
-    assert.equal(comment.raw, '{"npcs":[{"name":"Yun');
-    const tagged = extractNarrationCapture(`${STORY}\n<npc_state_delta>{"npcs":[`);
+test('the fence body never crosses another fence', () => {
+    const crossing = 'Story A.\n```json\n{"npcs":[]}\n```\nStory B\n```\nStatus\n```';
+    assert.deepEqual(extractNarrationCapture(crossing, { lenient: true }), { text: crossing, raw: '', status: 'none' }, 'story B and the status block survive');
+    const earlierCode = 'Story.\n```\ncode\n```\nMore.\n```json\n{"npcs":[]}\n```';
+    const result = extractNarrationCapture(earlierCode, { lenient: true });
+    assert.equal(result.status, 'found');
+    assert.equal(result.raw, '{"npcs":[]}');
+    assert.equal(result.text, 'Story.\n```\ncode\n```\nMore.', 'only the trailing npcs fence is removed');
+});
+
+test('a closing --> at the very end wins over a --> inside the JSON', () => {
+    const json = '{"npcs":[{"name":"Yunyun","goal":"A --> B"}]}';
+    const result = extractNarrationCapture(`${STORY} <!--npc_state_delta\n${json}\n-->\n`);
+    assert.deepEqual(result, { text: STORY, raw: json, status: 'found' }, 'nothing of the block leaks into the story');
+    assert.equal(parseNarrationCapture(result.raw).npcs[0].goal, 'A --> B');
+    const twoBlocks = extractNarrationCapture(`A <!--npc_state_delta {"npcs":[1]} --> B <!--npc_state_delta ${json} -->`);
+    assert.equal(twoBlocks.raw, json, 'the last block keeps its inner arrow');
+    assert.doesNotMatch(twoBlocks.text, /npc_state_delta|-->|npcs/);
+});
+
+test('an unterminated comment at the end is stripped in both modes; an unterminated tag only when lenient', () => {
+    const commentText = `${STORY}\n<!--npc_state_delta\n{"npcs":[{"name":"Yun`;
+    for (const lenient of [false, true]) {
+        const comment = extractNarrationCapture(commentText, { lenient });
+        assert.equal(comment.status, 'unterminated');
+        assert.equal(comment.text, STORY);
+        assert.equal(comment.raw, '{"npcs":[{"name":"Yun');
+        assert.equal(parseNarrationCapture(comment.raw), null, 'a cut-off body never parses');
+    }
+    const taggedText = `${STORY}\n<npc_state_delta>{"npcs":[`;
+    const tagged = extractNarrationCapture(taggedText, { lenient: true });
     assert.equal(tagged.status, 'unterminated');
     assert.equal(tagged.text, STORY);
     assert.equal(tagged.raw, '{"npcs":[');
-    assert.equal(parseNarrationCapture(comment.raw), null, 'a cut-off body never parses');
+    assert.equal(extractNarrationCapture(taggedText).status, 'none');
+    assert.equal(extractNarrationCapture(taggedText).text, taggedText);
 });
 
-test('multiple blocks are all stripped and the last body is kept', () => {
-    const text = `Opening line. <!--npc_state_delta {"npcs":[{"name":"First"}]} -->Middle line.\n<npc_state_delta>{"npcs":[{"name":"Second"}]}</npc_state_delta>\n\n<!--npc_state_delta\n{"npcs":[{"name":"Last"}]}\n-->\n`;
-    const result = extractNarrationCapture(text);
-    assert.equal(result.status, 'found');
-    assert.equal(result.raw, '{"npcs":[{"name":"Last"}]}');
-    assert.doesNotMatch(result.text, /npc_state_delta|First|Second|Last/);
-    assert.match(result.text, /^Opening line\. Middle line\.$/);
+test('multiple comment blocks are all stripped and the last body is kept', () => {
+    const text = 'Opening line. <!--npc_state_delta {"npcs":[{"name":"First"}]} -->Middle line.\n\n<!--npc_state_delta\n{"npcs":[{"name":"Last"}]}\n-->\n';
+    for (const lenient of [false, true]) {
+        const result = extractNarrationCapture(text, { lenient });
+        assert.equal(result.status, 'found');
+        assert.equal(result.raw, '{"npcs":[{"name":"Last"}]}');
+        assert.equal(result.text, 'Opening line. Middle line.');
+    }
+    const mixed = extractNarrationCapture('A <!--npc_state_delta {"npcs":[1]} --> B <npc_state_delta>{"npcs":[2]}</npc_state_delta> C <!--npc_state_delta {"npcs":[3]} -->', { lenient: true });
+    assert.equal(mixed.raw, '{"npcs":[3]}');
+    assert.doesNotMatch(mixed.text, /npc_state_delta|npcs/);
+    const strictMixed = extractNarrationCapture('A <!--npc_state_delta {"npcs":[1]} --> B <npc_state_delta>{"npcs":[2]}</npc_state_delta>');
+    assert.equal(strictMixed.raw, '{"npcs":[1]}');
+    assert.equal(strictMixed.text, 'A  B <npc_state_delta>{"npcs":[2]}</npc_state_delta>', 'strict mode removes only the comment');
 });
 
 test('text without a block is returned unchanged, including trailing whitespace', () => {
@@ -84,17 +119,18 @@ test('parseNarrationCapture returns the parsed object or null', () => {
     assert.equal(parseNarrationCapture('"just a string"'), null);
 });
 
-test('stripUiNoise removes capture blocks before any transcript reads the message', () => {
+test('stripUiNoise removes comment blocks (strict) before any transcript reads the message', () => {
     for (const block of [
         `<!--npc_state_delta\n${BLOCK_JSON}\n-->`,
-        `<npc_state_delta>${BLOCK_JSON}</npc_state_delta>`,
-        `\`\`\`json\n${BLOCK_JSON}\n\`\`\``,
         '<!--npc_state_delta {"npcs":[{"name":"Cut',
+        '<!--npc_state_delta {"npcs":[{"goal":"A --> B"}]} -->',
     ]) {
         const cleaned = stripUiNoise(`${STORY}\n\n${block}`);
-        assert.doesNotMatch(cleaned, /npc_state_delta|"npcs"/, block);
+        assert.doesNotMatch(cleaned, /npc_state_delta|"npcs"|-->/, block);
         assert.match(cleaned, /Yunyun waves from the gate/);
     }
+    // The lenient near-miss forms are not capture syntax for the transcript reader.
+    assert.match(stripUiNoise(`${STORY}\n\`\`\`json\n${BLOCK_JSON}\n\`\`\``), /"npcs"/);
 });
 
 const TRANSCRIPT = 'Kazuma: Who is that at the gate?\nMegumin: Yunyun waves from the gate, clutching her wand.';

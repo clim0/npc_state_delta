@@ -75,12 +75,13 @@ Leave the scanner connection profile empty to use SillyTavern's current connecti
 
 Off by default. **Scanning → One-pass narration capture** asks the roleplay model to end each reply with a hidden NPC update block. Delta removes the block from the message and uses it instead of the separate scan request for that reply.
 
-- **When it applies:** with Auto scan on and Full scan every turn off, for normal replies, swipes, regenerates and continues. Impersonate and background (quiet) generations never get the instruction.
-- **Cost:** every roleplay request grows by about 7,500-9,500 characters (roughly 2,000-2,700 tokens, estimated), plus the JSON block at the end of each reply. In return, a reply with a good block needs no scan request.
+- **When it applies:** with Auto scan on and Full scan every turn off, for new replies and continues. Swipes and regenerates use the normal scan, and impersonate and background (quiet) generations never get the instruction.
+- **Cost:** every asked-for reply's prompt grows by about 7,500-9,500 characters (roughly 2,000-2,700 tokens, estimated), plus the JSON block at the end of the reply. In return, a reply with a good block needs no scan request.
 - **Same checks as a scan:** the block goes through the same evidence checks as an ordinary scan, so it can only propose changes the story supports. It is used once, kept only in memory, and never saved, exported or shown in diagnostics.
-- **Fallback:** if the block is missing, broken or cut off, the reply was edited, or the page was reloaded first, the normal scan runs on its usual schedule. Focused relationship passes, Refresh and backfills still run as separate scanner requests.
+- **Fallback:** the normal scan runs on its usual schedule if the block is missing, broken or cut off, if the dossiers changed while the reply was being written (outdated), if the reply or an earlier message was edited, or if the page was reloaded first. Focused relationship passes, Refresh and backfills still run as separate scanner requests.
+- **Your story's own text is safe:** with the setting off, Delta removes only its own hidden `npc_state_delta` comment; JSON blocks and tags the story writes are left alone.
 - **Scanner connection profile:** replies with a good block are scanned by your roleplay model; the scanner profile still handles everything else.
-- **Check it live before relying on it:** watch a reply while it streams (the block should stay hidden), reload the chat to confirm the saved message has no block, and compare narration quality and length with the setting off. **Data & maintenance → Diagnostics → Roleplay injection** shows the instruction's size and how many replies were asked, used, missing, invalid or cut off.
+- **Check it live before relying on it:** watch a reply while it streams (the block should stay hidden), reload the chat to confirm the saved message has no block, and compare narration quality and length with the setting off. **Data & maintenance → Diagnostics → Roleplay injection** shows the instruction's size and how many replies were asked, used, missing, invalid, cut off or outdated.
 
 ## How dossiers work
 

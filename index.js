@@ -240,8 +240,12 @@ const assistantReceipts = new Map();
 // Kept in memory only; an edit, reload or broken block falls back to the ordinary scan.
 const narrationCaptures = new Map();
 const NARRATION_CAPTURE_LIMIT = 8;
-const narrationCaptureStats = { requested: 0, used: 0, missing: 0, invalid: 0, unterminated: 0 };
-let narrationCaptureArmed = false;
+const narrationCaptureStats = { requested: 0, used: 0, missing: 0, invalid: 0, unterminated: 0, outdated: 0 };
+// Swipe and regenerate rebuild the branch after the reply arrives, so their instruction would
+// describe the replaced sibling; only fresh replies and continues are asked for a block.
+const NARRATION_CAPTURE_TYPES = new Set(['', 'normal', 'continue']);
+let narrationCaptureArmed = '';
+let narrationCaptureVersion = null;
 const stateWriteTimers = new Map();
 const stateWritePromises = new Map();
 const stateVersions = new Map();
@@ -2394,7 +2398,7 @@ function updateInjection() {
     if (injectionKey === 'no-chat') return clear('No chat is open.');
     if (!settings.enabled) return clear('NPC State Delta is disabled.');
     const state = getChatState();
-    const capture = narrationCaptureArmed && narrationCaptureEnabled(settings)
+    const capture = narrationCaptureArmed === injectionKey && narrationCaptureEnabled(settings)
         ? buildNarrationCapturePrompt(scannerPromptOptions(state, settings, recentTranscript(4)))
         : '';
     if (!settings.inject && !capture) return clear('"Inject present NPC state" is off.');
@@ -3660,22 +3664,36 @@ function scannerPromptOptions(state, settings, transcript, extra = {}) {
 function narrationCaptureEnabled(settings = getSettings()) {
     return Boolean(settings.enabled && settings.narrationCapture && settings.autoScan && !settings.fullScanEveryTurn);
 }
-function narrationCaptureKey(chatKey, messageId, message) {
-    return `${chatKey}|${messageId}|${fingerprintMessage(message || {})}`;
+// Bound to the whole lineage up to the reply, so editing an earlier message also retires it.
+function narrationCaptureKey(chatKey, messageId) {
+    return `${chatKey}|${lineageCheckpointKey(chatLineage(getContext().chat || []), messageId)}`;
+}
+// The instruction describes the dossier as it was when the prompt was built; any dossier write
+// before the reply arrives (a finishing scan, a reconcile) makes the block outdated.
+function noteNarrationCaptureVersion(key) {
+    if (narrationCaptureArmed === key) narrationCaptureVersion = Number(stateVersions.get(key) || 0);
 }
 // Runs before any lineage key reads the reply, so every checkpoint binds the stripped text. Any
 // block is removed even with the mode off; only a complete, parseable one is kept for the scan.
+function stripNarrationSwipes(message, lenient) {
+    if (!Array.isArray(message?.swipes)) return;
+    for (let index = 0; index < message.swipes.length; index += 1) {
+        if (typeof message.swipes[index] === 'string') message.swipes[index] = extractNarrationCapture(message.swipes[index], { lenient }).text;
+    }
+}
+function rerenderNarrationMessage(messageId, message) {
+    try { getContext().updateMessageBlock?.(messageId, message); }
+    catch (error) { console.warn('[NPC State Delta] could not re-render a reply after removing its capture block.', error); }
+}
 function captureNarrationBlock(chatKey, messageId, message, armed) {
-    const extracted = extractNarrationCapture(message.mes);
+    const extracted = extractNarrationCapture(message.mes, { lenient: armed });
+    stripNarrationSwipes(message, armed);
     if (extracted.status === 'none') {
         if (armed) narrationCaptureStats.missing += 1;
         return;
     }
     message.mes = extracted.text;
-    const swipeId = Number(message.swipe_id);
-    if (Array.isArray(message.swipes) && typeof message.swipes[swipeId] === 'string') message.swipes[swipeId] = extractNarrationCapture(message.swipes[swipeId]).text;
-    try { getContext().updateMessageBlock?.(messageId, message); }
-    catch (error) { console.warn('[NPC State Delta] could not re-render a reply after removing its capture block.', error); }
+    rerenderNarrationMessage(messageId, message);
     // Only a reply written under the instruction may stand in for a scan; a block in any other
     // message (sendas, card text, another extension) is removed and ignored.
     if (!armed || !narrationCaptureEnabled() || !extracted.text.trim()) return;
@@ -3684,22 +3702,37 @@ function captureNarrationBlock(chatKey, messageId, message, armed) {
         narrationCaptureStats[extracted.status === 'found' ? 'invalid' : 'unterminated'] += 1;
         return;
     }
-    narrationCaptures.set(narrationCaptureKey(chatKey, messageId, message), { parsed, raw: extracted.raw });
+    narrationCaptures.set(narrationCaptureKey(chatKey, messageId), { parsed, raw: extracted.raw });
     while (narrationCaptures.size > NARRATION_CAPTURE_LIMIT) narrationCaptures.delete(narrationCaptures.keys().next().value);
 }
 function receiveNarrationBlock(messageId) {
-    const armed = narrationCaptureArmed;
-    narrationCaptureArmed = false;
-    // Drop the instruction now: later receipt paths may return before refreshing the injection,
-    // and a quiet generation from another extension must never carry it.
-    if (lastInjection.captureChars) updateInjection();
     const chatKey = getChatKey();
+    const armedHere = Boolean(narrationCaptureArmed) && narrationCaptureArmed === chatKey;
+    const current = armedHere && Number(stateVersions.get(chatKey) || 0) === narrationCaptureVersion;
+    disarmNarrationCapture();
     const message = Number.isInteger(messageId) ? getContext().chat?.[messageId] : null;
     if (!getSettings().enabled || chatKey === 'no-chat' || !message || message.is_user || message.is_system) return;
-    captureNarrationBlock(chatKey, messageId, message, armed);
+    if (armedHere) narrationCaptureStats[current ? 'requested' : 'outdated'] += 1;
+    captureNarrationBlock(chatKey, messageId, message, current);
 }
-function takeNarrationCapture(chatKey, messageId, message) {
-    const key = narrationCaptureKey(chatKey, messageId, message);
+// Swiping to a stored sibling must not bring back a block another reply path left in it.
+function stripSwipedNarrationBlock(messageId) {
+    const message = Number.isInteger(messageId) ? getContext().chat?.[messageId] : null;
+    if (!getSettings().enabled || !message || message.is_user || message.is_system) return;
+    const extracted = extractNarrationCapture(message.mes);
+    stripNarrationSwipes(message, false);
+    if (extracted.status === 'none') return;
+    message.mes = extracted.text;
+    rerenderNarrationMessage(messageId, message);
+}
+// Later receipt paths may return before refreshing the injection, and a quiet generation from
+// another extension must never carry the instruction.
+function disarmNarrationCapture() {
+    narrationCaptureArmed = '';
+    if (lastInjection.captureChars) updateInjection();
+}
+function takeNarrationCapture(chatKey, messageId) {
+    const key = narrationCaptureKey(chatKey, messageId);
     const capture = narrationCaptures.get(key) || null;
     narrationCaptures.delete(key);
     return capture && narrationCaptureEnabled() ? capture : null;
@@ -3744,7 +3777,7 @@ async function scanNow({ manual = false, messageId = null, allowDuringSwipe = fa
     const state = getChatState(scanChatKey);
     const scanStateVersion = Number(stateVersions.get(scanChatKey) || 0);
     const capture = !manual && !fullWindowScan && Number.isInteger(messageId)
-        ? takeNarrationCapture(scanChatKey, messageId, ctx.chat?.[messageId])
+        ? takeNarrationCapture(scanChatKey, messageId)
         : null;
     const scanLabel = capture ? 'narration-capture' : (manual ? 'manual' : (fullWindowScan ? 'automatic-full' : 'automatic'));
     const prompt = capture ? '' : buildScannerPrompt(scannerPromptOptions(state, settings, transcript, { currentTranscript, fullScanMode: fullWindowScan }));
@@ -3761,7 +3794,6 @@ async function scanNow({ manual = false, messageId = null, allowDuringSwipe = fa
             label: manual ? 'manual dossier scan' : (fullWindowScan ? 'automatic full dossier scan' : 'automatic dossier scan'),
             requestScope: operation.requestScope,
         });
-        if (capture) narrationCaptureStats.used += 1;
         let currentLineage = chatLineage(getContext().chat || []);
         if (!await scanCanonicalBaseCurrent(scanChatKey, operation, 'dossier scan')
             || !scanOperationCurrent(scanChatKey, operation) || getChatKey() !== scanChatKey
@@ -3790,6 +3822,7 @@ async function scanNow({ manual = false, messageId = null, allowDuringSwipe = fa
             return false;
         }
 
+        if (capture) narrationCaptureStats.used += 1;
         const resolvedParsed = resolveInterimIdentityPromotions(parsed, state.npcs, state.candidates);
         profileUpdateCount = Array.isArray(resolvedParsed.profileUpdates) ? resolvedParsed.profileUpdates.length : (Array.isArray(resolvedParsed.profile_updates) ? resolvedParsed.profile_updates.length : 0);
         // Relationship-edge extraction is a separate channel from ordinary NPC delta admission.
@@ -6637,7 +6670,7 @@ async function handleAssistantMessageReceived(messageId, { bypassSwipeGuard = fa
     const shouldForceBranchScan = forceBranchRescan && settings.branchRescan !== false;
     const autoScanDue = settings.autoScan && (settings.fullScanEveryTurn || state.assistantSinceScan >= settings.scanEvery);
     // A complete capture block is a scan already paid for, so it merges whatever Scan every says.
-    const captureDue = narrationCaptureEnabled(settings) && narrationCaptures.has(narrationCaptureKey(eventChatKey, messageId, eventMessage));
+    const captureDue = narrationCaptureEnabled(settings) && narrationCaptures.has(narrationCaptureKey(eventChatKey, messageId));
     const scanExpected = shouldForceBranchScan || autoScanDue || captureDue;
     // Receipt state belongs to this assistant even if scanning fails, skips or is busy.
     // A successful scan coalesces its changes into this same owned boundary.
@@ -6750,6 +6783,7 @@ function registerEvents() {
             // A turn typed on a chat that is behind the adopted dossier must not replace its lineage.
             if (!staleHostActive(key)) sentState.lineage = chatLineage(getContext().chat || []);
             updateInjection();
+            noteNarrationCaptureVersion(key);
         });
     }
     // Regenerate/swipe/continue answer an existing player turn without MESSAGE_SENT.
@@ -6757,17 +6791,14 @@ function registerEvents() {
         source.on(events.GENERATION_AFTER_COMMANDS, async (type, _options, dryRun) => {
             const key = getChatKey();
             if (dryRun || key === 'no-chat') return;
-            // The capture block is asked for only in replies the roleplay model writes into the
-            // chat; quiet and impersonate generations never carry the instruction.
+            // The capture block is asked for only in fresh replies and continues; quiet, impersonate,
+            // swipe and regenerate generations never carry the instruction.
+            const captureType = NARRATION_CAPTURE_TYPES.has(String(type ?? '')) && narrationCaptureEnabled();
             if (type === 'quiet') {
-                if (narrationCaptureArmed || lastInjection.captureChars) {
-                    narrationCaptureArmed = false;
-                    updateInjection();
-                }
+                disarmNarrationCapture();
                 return;
             }
-            narrationCaptureArmed = type !== 'impersonate' && narrationCaptureEnabled();
-            if (narrationCaptureArmed) narrationCaptureStats.requested += 1;
+            narrationCaptureArmed = '';
             // Every roleplay generation revalidates the canonical dossier (a 304 when unchanged)
             // before its prompt is built: regenerate/swipe/continue, an empty Send, impersonate and
             // group member turns have no MESSAGE_SENT, and an ordinary send reuses this read there.
@@ -6776,9 +6807,14 @@ function registerEvents() {
                 generationFreshness = { key, at: Date.now() };
             } catch (error) { console.warn('[NPC State Delta] pre-generation freshness check failed; the injection keeps the last verified dossier.', error); }
             if (getChatKey() !== key) return;
+            narrationCaptureArmed = captureType ? key : '';
             updateInjection();
+            // Armed only when the instruction actually went out (hydration may have withheld it).
+            if (!lastInjection.captureChars) narrationCaptureArmed = '';
+            noteNarrationCaptureVersion(key);
         });
     }
+    if (events.GENERATION_STOPPED) source.on(events.GENERATION_STOPPED, () => disarmNarrationCapture());
 
     if (events.MESSAGE_RECEIVED) {
         // The capture block leaves the reply before any other listener (TTS, full cast, other
@@ -6817,6 +6853,8 @@ function registerEvents() {
         });
     }
     if (events.MESSAGE_SWIPED) {
+        if (typeof source.makeFirst === 'function') source.makeFirst(events.MESSAGE_SWIPED, stripSwipedNarrationBlock);
+        else source.on(events.MESSAGE_SWIPED, stripSwipedNarrationBlock);
         source.on(events.MESSAGE_SWIPED, (messageId) => {
             queueSettledSwipeReconcile({
                 explicitDivergence: Number.isInteger(messageId) ? messageId : null,
@@ -6849,6 +6887,7 @@ function registerEvents() {
 
     if (events.CHAT_CHANGED) {
         source.on(events.CHAT_CHANGED, async () => {
+            narrationCaptureArmed = '';
             for (const cachedKey of chatStateCache.keys()) cancelScanOperation(cachedKey, 'chat changed');
             if (branchReconcileTimer) clearTimeout(branchReconcileTimer);
             branchReconcileTimer = null;
@@ -7045,7 +7084,7 @@ window.NPCStateDelta = Object.freeze({
         scanBusyForChat: isScanBusy(getChatKey()),
         scanOperation: scanOperations.status(getChatKey()),
         scannerRouting: scannerRoutingMetrics(),
-        narrationCapture: { ...narrationCaptureStats, enabled: narrationCaptureEnabled(), armed: narrationCaptureArmed, pending: narrationCaptures.size },
+        narrationCapture: { ...narrationCaptureStats, enabled: narrationCaptureEnabled(), armed: Boolean(narrationCaptureArmed), pending: narrationCaptures.size },
         inlineEntries: chatHydrationStatus(getChatKey()) === 'ready' ? (getChatState().inlineCards?.length || 0) : 0,
         mountedInlineAnchors: document.querySelectorAll?.('.npc-state-delta-inline-anchor')?.length || 0,
         integratedMeguminBlocks: document.querySelectorAll?.('.npc-state-delta-megumin-pane')?.length || 0,

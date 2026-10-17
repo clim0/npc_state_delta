@@ -17,6 +17,7 @@ function runScenario(name, scenario, { makeFirst = false } = {}) {
     if (cut < 0) throw new Error('Runtime smoke import marker changed');
     const script = `${source.slice(0, cut)}
 mockState.context.eventTypes.GENERATION_AFTER_COMMANDS = 'generation_after_commands';
+mockState.context.eventTypes.GENERATION_STOPPED = 'generation_stopped';
 mockState.updatedBlocks = [];
 mockState.context.updateMessageBlock = (id, message) => { mockState.updatedBlocks.push({ id, mes: message.mes }); };
 mockState.earlierListenerSaw = [];
@@ -35,7 +36,7 @@ try {
     eventSource.emit('app_ready');
     eventSource.emit('extension_settings_loaded');
     await sleep(30);
-    const helpers = (${captureHelpers.toString()})(mockState, eventSource, sleep);
+    const helpers = (${captureHelpers.toString()})(mockState, eventSource, sleep, manualAddNpc);
     await (${scenario.toString()})(helpers);
     console.log('narration capture scenario ${name} passed');
 } finally {
@@ -61,7 +62,7 @@ try {
 }
 
 // Runs inside the synthetic host. Returns the shared drivers for one scenario.
-function captureHelpers(mockState, eventSource, sleep) {
+function captureHelpers(mockState, eventSource, sleep, manualAddNpc) {
     const fail = message => { throw new Error(message); };
     const check = (condition, message) => { if (!condition) fail(message); };
     const equal = (actual, expected, message) => {
@@ -99,8 +100,8 @@ function captureHelpers(mockState, eventSource, sleep) {
         mockState.context.chat.push({ is_user: true, is_system: false, name: 'Kazuma', mes: text });
         await emitAsync('message_sent', mockState.context.chat.length - 1);
     };
-    const receiveAssistant = async text => {
-        mockState.context.chat.push({ is_user: false, is_system: false, name: 'Megumin', mes: text, swipe_id: 0, swipes: [text] });
+    const receiveAssistant = async (text, { swipes = [text], swipeId = swipes.length - 1 } = {}) => {
+        mockState.context.chat.push({ is_user: false, is_system: false, name: 'Megumin', mes: text, swipe_id: swipeId, swipes: [...swipes] });
         const id = mockState.context.chat.length - 1;
         await emitAsync('message_received', id);
         await sleep(80);
@@ -116,10 +117,10 @@ function captureHelpers(mockState, eventSource, sleep) {
         if (/isolated dossier scanner\./i.test(String(args.systemPrompt || ''))) return JSON.stringify({ npcs: [{ ...YUNYUN, role: 'scanned adventurer' }] });
         return '{"npcs":[]}';
     };
-    return { fail, check, equal, runtime, settings, HEADER, REPLY, YUNYUN, block, scannerCalls, relationshipCalls, dossierPrompts, lastPrompt, status, npc, emitAsync, generate, sendUser, receiveAssistant, turn, mockState, sleep };
+    return { manualAddNpc, fail, check, equal, runtime, settings, HEADER, REPLY, YUNYUN, block, scannerCalls, relationshipCalls, dossierPrompts, lastPrompt, status, npc, emitAsync, generate, sendUser, receiveAssistant, turn, mockState, sleep };
 }
 
-test('v1.1.8 capture arms the roleplay injection only for chat replies (normal, not quiet/impersonate/dry-run)', () => {
+test('v1.1.8 capture arms only fresh replies and continues (not quiet/swipe/regenerate/impersonate/dry-run)', () => {
     runScenario('injection-arming', async h => {
         h.settings.narrationCapture = true;
         await h.sendUser('Who is at the gate?');
@@ -134,29 +135,37 @@ test('v1.1.8 capture arms the roleplay injection only for chat replies (normal, 
         h.check(!h.lastPrompt().includes('Who is at the gate?'), 'the capture instruction carries no transcript');
         h.check(h.runtime.injectionPreview().captureChars > 1000, 'the preview reports the capture size');
         h.equal(h.status().armed, true, 'armed after a normal generation');
-        h.equal(h.status().requested, 1, 'one armed generation counted');
+        h.equal(h.status().requested, 0, 'requested is counted at receipt, not at arming');
 
         await h.generate('quiet');
         h.check(!h.lastPrompt().includes(h.HEADER), 'a quiet generation removes the capture instruction');
         h.equal(h.status().armed, false, 'quiet disarms');
         h.equal(h.runtime.injectionPreview().captureChars, 0);
 
-        await h.generate('swipe');
-        h.check(h.lastPrompt().includes(h.HEADER), 'swipe/regenerate replies are armed too');
-        await h.generate('impersonate');
-        h.check(!h.lastPrompt().includes(h.HEADER), 'impersonate never carries the capture instruction');
-        h.equal(h.status().armed, false, 'impersonate disarms');
-        h.equal(h.status().requested, 2, 'impersonate is not counted as an armed generation');
+        for (const type of ['swipe', 'regenerate', 'impersonate']) {
+            await h.generate('normal');
+            h.equal(h.status().armed, true, `armed before ${type}`);
+            await h.generate(type);
+            h.check(!h.lastPrompt().includes(h.HEADER), `${type} never carries the capture instruction`);
+            h.equal(h.status().armed, false, `${type} disarms`);
+            h.equal(h.runtime.injectionPreview().captureChars, 0, `${type} sends no capture`);
+        }
+        for (const type of ['continue', '', undefined]) {
+            await h.generate('quiet');
+            await h.generate(type);
+            h.check(h.lastPrompt().includes(h.HEADER), `${JSON.stringify(type)} carries the capture instruction`);
+            h.equal(h.status().armed, true, `${JSON.stringify(type)} arms`);
+        }
 
         await h.generate('normal');
         const armedPrompt = h.lastPrompt();
         const promptCount = h.dossierPrompts().length;
         await h.generate('quiet', true);
         await h.generate('impersonate', true);
+        await h.generate('swipe', true);
         h.equal(h.dossierPrompts().length, promptCount, 'dry runs never rebuild the injection');
         h.equal(h.lastPrompt(), armedPrompt, 'dry runs leave the armed instruction in place');
         h.equal(h.status().armed, true, 'dry runs do not disarm');
-        h.equal(h.status().requested, 3);
 
         // The instruction is sent even when the dossier injection itself is off.
         h.settings.inject = false;
@@ -166,6 +175,20 @@ test('v1.1.8 capture arms the roleplay injection only for chat replies (normal, 
         await h.generate('quiet');
         h.equal(h.lastPrompt(), '', 'quiet with Inject off clears the prompt entirely');
         h.equal(h.scannerCalls().length, 0, 'arming never makes a scanner request');
+        h.equal(h.status().requested, 0, 'no reply was received');
+    });
+});
+
+test('v1.1.8 Capture mode off, or Auto scan off, never arms', () => {
+    runScenario('arming-gates', async h => {
+        await h.sendUser('Who is at the gate?');
+        await h.generate('normal');
+        h.equal(h.status().armed, false, 'off by default');
+        h.settings.narrationCapture = true;
+        h.settings.autoScan = false;
+        await h.generate('normal');
+        h.equal([h.status().enabled, h.status().armed], [false, false], 'Auto scan off disables capture');
+        h.check(h.dossierPrompts().every(text => !text.includes(h.HEADER)), 'no capture instruction was ever injected');
     });
 });
 
@@ -237,6 +260,7 @@ test('v1.1.8 receipt withdraws the instruction at once, even when the reply is o
         h.check(!h.lastPrompt().includes(h.HEADER), 'a later quiet generation carries no instruction');
         h.equal(h.scannerCalls().length, before, 'an empty reply is not scanned');
         h.equal(h.status().used, 1, 'the block of an empty reply is never merged');
+        h.equal(h.status().pending, 0, 'the block of an empty reply is not kept');
     });
 });
 
@@ -372,4 +396,163 @@ test('v1.1.8 with a host makeFirst the block is stripped before earlier-register
         h.equal(h.scannerCalls().length, 0);
         h.equal(h.status().used, 1);
     }, { makeFirst: true });
+});
+
+test('v1.1.8 tag and fence near-misses are accepted only from an armed reply; unarmed ones stay intact', () => {
+    runScenario('lenient-forms', async h => {
+        h.settings.narrationCapture = true;
+        const fence = `\n\n\`\`\`json\n${JSON.stringify({ npcs: [h.YUNYUN] })}\n\`\`\``;
+        await h.sendUser('Who is at the gate?');
+        const unarmed = await h.receiveAssistant(`${h.REPLY}${fence}`);
+        h.equal(h.mockState.context.chat[unarmed].mes, `${h.REPLY}${fence}`, 'an unarmed reply keeps its fence (strict mode)');
+        h.equal(h.mockState.context.chat[unarmed].swipes[0], `${h.REPLY}${fence}`);
+        h.equal(h.scannerCalls().length, 1, 'and is scanned normally');
+        h.equal(h.npc('Yunyun')?.role, 'scanned adventurer');
+
+        const tag = `\n<npc_state_delta>${JSON.stringify({ npcs: [{ name: 'Yunyun', present: true, role: 'tagged adventurer' }] })}</npc_state_delta>`;
+        await h.sendUser('And now?');
+        const unarmedTag = await h.receiveAssistant(`${h.REPLY}${tag}`);
+        h.equal(h.mockState.context.chat[unarmedTag].mes, `${h.REPLY}${tag}`, 'an unarmed tag form is left intact');
+        h.equal(h.scannerCalls().length, 2, 'and is scanned normally');
+
+        const second = 'Yunyun now waits at the guild hall, nervously polishing her wand.';
+        const update = { npcs: [{ name: 'Yunyun', present: true, location: 'guild hall', relationshipImpact: 'none', relationshipDelta: { trust: 0, affection: 0, desire: 0, tension: 0 } }] };
+        const armedId = await h.turn('I go to the guild hall.', `${second}\n<npc_state_delta>${JSON.stringify(update)}</npc_state_delta>`);
+        h.equal(h.mockState.context.chat[armedId].mes, second, 'an armed reply has its tag form removed (lenient)');
+        h.equal(h.scannerCalls().length, 2, 'and the armed tag form replaces the scan');
+        h.check(/guild hall/i.test(String(h.npc('Yunyun').location || '')), 'the tag form was merged');
+        const fenceId = await h.turn('We sit down.', `They sit at a table.\n\`\`\`json\n${JSON.stringify({ npcs: [{ name: 'Yunyun', present: true, relationshipImpact: 'none', relationshipDelta: { trust: 0, affection: 0, desire: 0, tension: 0 } }] })}\n\`\`\``);
+        h.equal(h.mockState.context.chat[fenceId].mes, 'They sit at a table.', 'an armed trailing fence is removed (lenient)');
+        h.equal(h.scannerCalls().length, 2);
+        h.equal([h.status().requested, h.status().used], [2, 2]);
+    });
+});
+
+test('v1.1.8 a dossier change between the prompt and the reply makes the block outdated', () => {
+    runScenario('outdated', async h => {
+        h.settings.narrationCapture = true;
+        await h.sendUser('Who is at the gate?');
+        await h.generate('normal');
+        h.equal(h.status().armed, true);
+        // The player adds a dossier while the reply is being generated.
+        await h.manualAddNpc('Wiz');
+        h.check(h.npc('Wiz'), 'the manual add landed');
+        const id = await h.receiveAssistant(`${h.REPLY}${h.block()}`);
+        h.equal(h.mockState.context.chat[id].mes, h.REPLY, 'the comment block is still stripped');
+        h.equal([h.status().requested, h.status().outdated, h.status().used, h.status().pending], [0, 1, 0, 0], 'counted as outdated, never stored');
+        h.equal(h.scannerCalls().length, 1, 'the normal scanner request runs');
+        h.equal(h.npc('Yunyun')?.role, 'scanned adventurer', 'the outdated block is not merged');
+        h.check(h.npc('Wiz'), 'the manual dossier survives');
+
+        // Without an intervening write the next reply is current again.
+        await h.turn('And then?', `${h.REPLY} Again.${h.block({ npcs: [{ name: 'Yunyun', present: true, relationshipImpact: 'none', relationshipDelta: { trust: 0, affection: 0, desire: 0, tension: 0 } }] })}`);
+        h.equal([h.status().requested, h.status().outdated, h.status().used], [1, 1, 1]);
+        h.equal(h.scannerCalls().length, 1);
+    });
+});
+
+test('v1.1.8 editing the earlier user message retires a pending capture', () => {
+    runScenario('edited-user-message', async h => {
+        h.settings.narrationCapture = true;
+        await h.turn('Who is at the gate?', 'A quiet wind crosses the gate.');
+        const before = h.scannerCalls().length;
+        let release;
+        const held = new Promise(resolve => { release = resolve; });
+        const responder = h.mockState.quietResponder;
+        h.mockState.quietResponder = async (...args) => { await held; return responder(...args); };
+        const manual = h.runtime.scan();
+        await h.sleep(20);
+        await h.sendUser('Who is that?');
+        await h.generate('normal');
+        const id = await h.receiveAssistant(`${h.REPLY}${h.block()}`);
+        h.equal(h.status().pending, 1, 'the capture is stored while the scan is busy');
+        const editedUser = 'Who is that girl with the crimson eyes?';
+        h.mockState.context.chat[id - 1].mes = editedUser;
+        await h.emitAsync('message_edited', id - 1);
+        h.mockState.quietResponder = responder;
+        release();
+        await manual;
+        await h.sleep(700);
+        const after = h.scannerCalls().slice(before + 1);
+        h.check(after.some(args => String(args.prompt).includes(editedUser) && String(args.prompt).includes('Yunyun tells Kazuma')), `the reply was rescanned with a real request after the user edit (${after.length} later requests)`);
+        h.equal(h.status().used, 0, 'the capture written for the old user message was never merged');
+        h.equal(h.npc('Yunyun')?.role, 'scanned adventurer');
+    });
+});
+
+test('v1.1.8 every swipe entry is stripped at receipt, leniently only when armed', () => {
+    runScenario('swipe-entries', async h => {
+        h.settings.narrationCapture = true;
+        await h.sendUser('Who is at the gate?');
+        await h.generate('normal');
+        const older = 'An older sibling reply.';
+        const olderTag = 'A tagged sibling.';
+        const current = `${h.REPLY}${h.block()}`;
+        const id = await h.receiveAssistant(current, {
+            swipes: [`${older}${h.block({ npcs: [{ name: 'Old' }] })}`, `${olderTag}\n<npc_state_delta>{"npcs":[]}</npc_state_delta>`, current],
+            swipeId: 2,
+        });
+        h.equal(h.mockState.context.chat[id].swipes, [older, olderTag, h.REPLY], 'all swipe strings are stripped (armed: lenient)');
+        h.equal(h.status().used, 1);
+
+        await h.sendUser('Next?');
+        const unarmedTag = 'Unarmed tagged sibling.\n<npc_state_delta>{"npcs":[]}</npc_state_delta>';
+        const plain = 'A plain reply.';
+        const id2 = await h.receiveAssistant(plain, { swipes: [`Hidden sibling.${h.block()}`, unarmedTag, plain], swipeId: 2 });
+        h.equal(h.mockState.context.chat[id2].swipes, ['Hidden sibling.', unarmedTag, plain], 'unarmed: comment blocks stripped, tag form kept (strict)');
+    });
+});
+
+test('v1.1.8 MESSAGE_SWIPED strictly strips the swiped message before other listeners', () => {
+    runScenario('message-swiped', async h => {
+        h.settings.narrationCapture = true;
+        const id = await h.turn('Who is at the gate?', 'A quiet wind crosses the gate.');
+        const message = h.mockState.context.chat[id];
+        const sibling = 'Yunyun appears at the gate.';
+        const tagged = 'Tagged sibling.\n<npc_state_delta>{"npcs":[]}</npc_state_delta>';
+        message.swipes = ['A quiet wind crosses the gate.', `${sibling}${h.block()}`, tagged];
+        message.swipe_id = 1;
+        message.mes = message.swipes[1];
+        const listeners = h.mockState.listeners.get('message_swiped') || [];
+        h.check(listeners.length >= 2, 'the strip and the reconcile listeners are both registered');
+        // Only the first listener (placed by makeFirst) runs here.
+        listeners[0](id);
+        h.equal(message.mes, sibling, 'the swiped-to text is stripped by the first listener');
+        h.equal(message.swipes, ['A quiet wind crosses the gate.', sibling, tagged], 'every stored swipe loses its comment block; the tag form stays (strict)');
+        h.equal(h.status().used, 0, 'a swipe never merges a block');
+    }, { makeFirst: true });
+});
+
+test('v1.1.8 CHAT_CHANGED disarms the instruction', () => {
+    runScenario('chat-changed', async h => {
+        h.settings.narrationCapture = true;
+        await h.sendUser('Who is at the gate?');
+        await h.generate('normal');
+        h.equal(h.status().armed, true);
+        await h.emitAsync('chat_changed');
+        await h.sleep(150);
+        h.equal(h.status().armed, false, 'a chat change disarms');
+        h.check(!h.lastPrompt().includes(h.HEADER), 'the instruction is no longer injected');
+        const id = await h.receiveAssistant(`${h.REPLY}${h.block()}`);
+        h.equal(h.mockState.context.chat[id].mes, h.REPLY, 'the block is still stripped');
+        h.equal(h.scannerCalls().length, 1, 'the reply is scanned normally');
+        h.equal([h.status().requested, h.status().used, h.status().pending], [0, 0, 0]);
+    });
+});
+
+test('v1.1.8 GENERATION_STOPPED disarms the instruction', () => {
+    runScenario('generation-stopped', async h => {
+        h.settings.narrationCapture = true;
+        await h.sendUser('Who is at the gate?');
+        await h.generate('normal');
+        h.check(h.lastPrompt().includes(h.HEADER));
+        await h.emitAsync('generation_stopped');
+        h.equal(h.status().armed, false, 'a stopped generation disarms');
+        h.check(!h.lastPrompt().includes(h.HEADER), 'and withdraws the instruction at once');
+        h.equal(h.runtime.injectionPreview().captureChars, 0);
+        const id = await h.receiveAssistant(`${h.REPLY}${h.block()}`);
+        h.equal(h.mockState.context.chat[id].mes, h.REPLY);
+        h.equal(h.scannerCalls().length, 1, 'a later reply is scanned normally');
+        h.equal([h.status().requested, h.status().used], [0, 0]);
+    });
 });

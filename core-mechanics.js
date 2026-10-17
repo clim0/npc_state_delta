@@ -1487,20 +1487,25 @@ function parseWithScannerRepairs(text, firstError) {
 
 // One-pass narration capture (opt-in). The roleplay model ends its reply with the quick-scan JSON
 // inside a hidden comment; the block is removed from the stored message before any lineage key or
-// transcript reads it. Tagged and trailing-fence forms are tolerated so a near-miss never shows.
-const NARRATION_CAPTURE_BLOCK = /<!--\s*npc_state_delta\b([\s\S]*?)(?:-->|$)|<npc_state_delta\b[^>]*>([\s\S]*?)(?:<\/npc_state_delta>|$)|```(?:json)?\s*(\{\s*"npcs"[\s\S]*?)```\s*$/gi;
+// transcript reads it. A closing `-->` at the very end wins so one inside the JSON cannot split the
+// block. The tag and trailing-fence near-misses are accepted only from a reply asked for the block.
+const NARRATION_CAPTURE_COMMENT = /<!--\s*npc_state_delta\b((?:(?!<!--\s*npc_state_delta\b)[\s\S])*?)-->\s*$|<!--\s*npc_state_delta\b([\s\S]*?)-->|<!--\s*npc_state_delta\b([\s\S]*)$/gi;
+const NARRATION_CAPTURE_NEAR_MISS = /<npc_state_delta\b[^>]*>([\s\S]*?)(?:<\/npc_state_delta>|$)|```(?:json)?\s*(\{\s*"npcs"(?:(?!```)[\s\S])*)```\s*$/gi;
 const NARRATION_CAPTURE_CLOSED = /(?:-->|<\/npc_state_delta>|```)\s*$/i;
 
-export function extractNarrationCapture(text) {
-    const source = String(text ?? '');
-    let raw = '';
-    let status = 'none';
-    const clean = source.replace(NARRATION_CAPTURE_BLOCK, (whole, comment, tagged, fenced) => {
-        raw = String(comment ?? tagged ?? fenced ?? '').trim();
-        status = NARRATION_CAPTURE_CLOSED.test(whole) ? 'found' : 'unterminated';
+function removeNarrationCaptureBlocks(source, pattern, found) {
+    return source.replace(pattern, (whole, ...groups) => {
+        found.raw = String(groups.slice(0, -2).find(group => group !== undefined) ?? '').trim();
+        found.status = NARRATION_CAPTURE_CLOSED.test(whole) ? 'found' : 'unterminated';
         return '';
     });
-    return status === 'none' ? { text: source, raw, status } : { text: clean.replace(/\s+$/, ''), raw, status };
+}
+
+export function extractNarrationCapture(text, { lenient = false } = {}) {
+    const source = String(text ?? '');
+    const found = { raw: '', status: 'none' };
+    const clean = removeNarrationCaptureBlocks(lenient ? removeNarrationCaptureBlocks(source, NARRATION_CAPTURE_NEAR_MISS, found) : source, NARRATION_CAPTURE_COMMENT, found);
+    return found.status === 'none' ? { text: source, ...found } : { text: clean.replace(/\s+$/, ''), ...found };
 }
 
 export function parseNarrationCapture(raw) {
