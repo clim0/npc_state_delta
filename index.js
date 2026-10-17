@@ -87,6 +87,8 @@ import {
     formPortraitKey,
     formPortraitFor,
     normalizeFormPortraitAssets,
+    normalizeCustomFieldNames,
+    normalizeCustomFields,
 } from './core.js';
 import { applyNpcBirthdayUpdate, normalizeBirthDate } from './birthday.js';
 import {
@@ -472,6 +474,7 @@ const DEFAULTS = Object.freeze({
     injectDepth: 1,
     injectLimit: 3,
     injectBudgetTokens: 4000,
+    customFieldNames: [],
     branchRescan: true,
     midDeleteRewind: false,
     presentCastDisplay: 'full',
@@ -535,6 +538,7 @@ function getSettings() {
     // Current-format settings are canonicalized in place; older Delta schemas are unsupported.
     assign('relationshipBaseline', normalizeRelationshipBaseline(settings.relationshipBaseline), sameJson);
     assign('relationshipCaps', normalizeRelationshipCaps(settings.relationshipCaps), sameJson);
+    assign('customFieldNames', normalizeCustomFieldNames(settings.customFieldNames), sameJson);
     assign('relationshipCriteria', typeof settings.relationshipCriteria === 'string' ? settings.relationshipCriteria : DEFAULT_RELATIONSHIP_CRITERIA);
     assign('relationshipImpactCriteria', typeof settings.relationshipImpactCriteria === 'string' ? settings.relationshipImpactCriteria : DEFAULT_IMPACT_CRITERIA);
     assign('memoryCriteria', typeof settings.memoryCriteria === 'string' ? settings.memoryCriteria : DEFAULT_MEMORY_CRITERIA);
@@ -2380,7 +2384,7 @@ function updateInjection() {
     if (!settings.inject) return clear('"Inject present NPC state" is off.');
     const state = getChatState();
     const namedNpcIds = namedByPlayerNpcIds(state);
-    const prompt = buildInjection(state.npcs, recentTranscript(4), state.turn, settings.injectLimit, settings.behaviorCriteria, settings.injectBudgetTokens, state.socialGraph, { namedNpcIds });
+    const prompt = buildInjection(state.npcs, recentTranscript(4), state.turn, settings.injectLimit, settings.behaviorCriteria, settings.injectBudgetTokens, state.socialGraph, { namedNpcIds, customFieldNames: settings.customFieldNames });
     const present = (state.npcs || []).filter(npc => npc?.present && !npc?.archived);
     const depth = Math.max(0, Math.min(20, Number(settings.injectDepth) || 1));
     lastInjection = {
@@ -2778,6 +2782,11 @@ function syncOpenNpcEditorFields(npc) {
     set('npc_state_delta_edit_species', npc.species || '');
     set('npc_state_delta_edit_gender', npc.gender || '');
     set('npc_state_delta_edit_home_base', npc.homeBase || '');
+    const customFields = normalizeCustomFields(npc.customFields);
+    for (const input of document.querySelectorAll?.('#npc_state_delta_editor_content [data-delta-custom-field]') || []) {
+        const key = Object.keys(customFields).find(other => other.toLowerCase() === String(input.dataset.deltaCustomField || '').toLowerCase());
+        input.value = key ? customFields[key] : '';
+    }
     set('npc_state_delta_edit_age', npc.age || '');
     set('npc_state_delta_edit_birthday', npc.birthDateDisplay || '');
     set('npc_state_delta_edit_apparent_age', npc.apparentAge || '');
@@ -2847,6 +2856,7 @@ async function refreshNpcFromChat(npcId) {
         memoryCriteria: settings.memoryCriteria,
         turn: Number.isInteger(state.turn) ? state.turn : null,
         storyDay: storyDayAt(latestMessageId(true)),
+        customFieldNames: settings.customFieldNames,
     });
     const scanStateVersion = Number(stateVersions.get(chatKey) || 0);
     const operation = beginScanOperation(chatKey, `chat refresh for ${existing.name}`, { npcId: id, indicator: 'refresh' });
@@ -2936,6 +2946,7 @@ async function refreshNpcFromChat(npcId) {
             sourceMessageId: targetMessageId,
             calendarSource: getContext().chat?.[targetMessageId]?.mes || '',
             storyDay: storyDayAt(targetMessageId),
+            customFieldNames: settings.customFieldNames,
             relationshipBaseline: settings.relationshipBaseline,
             relationshipCaps: settings.relationshipCaps,
             autoArchiveDeaths: settings.autoArchiveDeaths !== false,
@@ -3132,6 +3143,7 @@ async function backfillNpcFromHistory(request, messageId = null, { automatic = f
         userName: ctx.name1 || 'User',
         charName: ctx.name2 || 'Character',
         memoryCriteria: settings.memoryCriteria,
+        customFieldNames: settings.customFieldNames,
     });
 
     const scanStateVersion = Number(stateVersions.get(chatKey) || 0);
@@ -3221,6 +3233,7 @@ async function backfillNpcFromHistory(request, messageId = null, { automatic = f
             sourceMessageId: targetMessageId,
             calendarSource: getContext().chat?.[targetMessageId]?.mes || '',
             storyDay: storyDayAt(targetMessageId),
+            customFieldNames: settings.customFieldNames,
             relationshipBaseline: settings.relationshipBaseline,
             relationshipCaps: settings.relationshipCaps,
             autoArchiveDeaths: settings.autoArchiveDeaths !== false,
@@ -3643,6 +3656,7 @@ async function scanNow({ manual = false, messageId = null, allowDuringSwipe = fa
     const scanStateVersion = Number(stateVersions.get(scanChatKey) || 0);
     const prompt = buildScannerPrompt({
         transcript,
+        customFieldNames: settings.customFieldNames,
         existingNpcs: state.npcs,
         candidates: state.candidates,
         userName: ctx.name1 || 'User',
@@ -3768,6 +3782,7 @@ async function scanNow({ manual = false, messageId = null, allowDuringSwipe = fa
             sourceMessageId: targetMessageId,
             calendarSource: getContext().chat?.[targetMessageId]?.mes || '',
             storyDay: storyDayAt(targetMessageId),
+            customFieldNames: settings.customFieldNames,
             relationshipBaseline: settings.relationshipBaseline,
             relationshipCaps: settings.relationshipCaps,
             autoArchiveDeaths: settings.autoArchiveDeaths !== false,
@@ -3989,6 +4004,8 @@ function buildSettingsHtml() {
         ${settingRow('npc_state_delta_inject', 'Inject present NPC state', '<input id="npc_state_delta_inject" type="checkbox">', 'Only active NPCs present in the latest scanned scene are injected into generation.')}
         ${settingRow('npc_state_delta_inject_budget', 'Injection budget', numberControl('npc_state_delta_inject_budget', 512, 6000, 'tokens', { step: 100, prefix: '<small>~</small>' }), 'Upper limit; only what the present NPCs need is used. The default 4000 lets detailed dossiers reach the roleplay model in full. When it runs short, lower-priority fields, then lower-ranked NPCs, are trimmed first.')}
         ${settingsSlot('relationship-map')}
+        <h4 class="delta-settings-subhead">Custom fields</h4>
+        ${settingRow('npc_state_delta_custom_fields', 'Custom fields', '<input id="npc_state_delta_custom_fields" class="text_pole" maxlength="260" placeholder="Level, Class, Faction">', 'Up to 6 names, comma-separated, tracked on every dossier. The scanner fills a value only when the story states it, keeps it until it is explicitly changed, and it is sent with present NPCs. Leave empty to turn off.')}
         <h4 class="delta-settings-subhead">Roster lifecycle</h4>
         ${settingRow('npc_state_delta_max', 'Maximum active NPCs', numberControl('npc_state_delta_max', 1, 100), 'Archived dossiers do not use an active slot.')}
         ${settingRow('npc_state_delta_archive_deaths', 'Archive confirmed deaths', '<input id="npc_state_delta_archive_deaths" type="checkbox">', 'Explicit current-timeline deaths archive instead of deleting. Ambiguous death language is ignored.')}
@@ -4165,6 +4182,7 @@ function syncSettingsControls() {
     $('#npc_state_delta_stale_delete_after').val(s.staleDeleteAfter);
     $('#npc_state_delta_inject').prop('checked', !!s.inject);
     $('#npc_state_delta_inject_budget').val(s.injectBudgetTokens);
+    $('#npc_state_delta_custom_fields').val((s.customFieldNames || []).join(', '));
     $('#npc_state_delta_archive_deaths').prop('checked', s.autoArchiveDeaths !== false);
     $('#npc_state_delta_reactivate_archived').prop('checked', s.autoReactivateArchived !== false);
     $('#npc_state_delta_branch_rescan').prop('checked', s.branchRescan !== false);
@@ -4945,6 +4963,29 @@ function cleanEditorList(value, max = 12) {
     return [...new Set(String(value || '').split(/\r?\n/).map(item => item.trim()).filter(Boolean))].slice(0, max);
 }
 
+// Configured custom fields, plus any value stored under a name no longer configured so it can be cleared.
+function customFieldEditorNames(npc) {
+    const names = [...normalizeCustomFieldNames(getSettings().customFieldNames)];
+    for (const key of Object.keys(normalizeCustomFields(npc?.customFields))) {
+        if (!names.some(name => name.toLowerCase() === key.toLowerCase())) names.push(key);
+    }
+    return names;
+}
+
+function customFieldEditorHtml(npc) {
+    const stored = normalizeCustomFields(npc?.customFields);
+    return customFieldEditorNames(npc).map(name => {
+        const key = Object.keys(stored).find(other => other.toLowerCase() === name.toLowerCase());
+        return `<label>${editorValue(name)} <small>Custom field</small><input class="text_pole" maxlength="60" data-delta-custom-field="${editorValue(name)}" value="${editorValue(key ? stored[key] : '')}"></label>`;
+    }).join('');
+}
+
+function customFieldEditorValues(current) {
+    const inputs = [...document.querySelectorAll('#npc_state_delta_editor_content [data-delta-custom-field]')];
+    if (!inputs.length) return normalizeCustomFields(current?.customFields);
+    return normalizeCustomFields(Object.fromEntries(inputs.map(input => [input.dataset.deltaCustomField, String(input.value || '').trim()])));
+}
+
 function editorValue(value) {
     return escapeHtml(String(value ?? ''));
 }
@@ -4981,6 +5022,7 @@ function openNpcEditor(npcId) {
         <label>Gender<select id="npc_state_delta_edit_gender" class="text_pole"><option value="" ${!npc.gender ? 'selected' : ''}>Unknown / not established</option><option value="male" ${npc.gender === 'male' ? 'selected' : ''}>Male</option><option value="female" ${npc.gender === 'female' ? 'selected' : ''}>Female</option></select></label>
         <label>Role<input id="npc_state_delta_edit_role" class="text_pole" value="${editorValue(npc.role)}"></label>
         <label>Home Base / Usual Location<input id="npc_state_delta_edit_home_base" class="text_pole" maxlength="300" placeholder="Home, workplace, headquarters, or regular haunt" value="${editorValue(npc.homeBase)}"></label>
+        ${customFieldEditorHtml(npc)}
         <label>Chronological age<input id="npc_state_delta_edit_age" class="text_pole" maxlength="80" placeholder="Actual stated age; leave blank if unknown" value="${editorValue(npc.age)}"></label>
         <label>Birthday <small>${npc.birthDateSource === 'generated' ? 'Generated fallback; editing establishes a manual correction' : (npc.birthDateSource === 'established' ? 'Established date; editing records a manual correction' : 'Uses the active calendar')}</small><input id="npc_state_delta_edit_birthday" class="text_pole" maxlength="180" placeholder="MM-DD / YYYY-MM-DD or configured calendar date" value="${editorValue(npc.birthDateDisplay)}"></label>
         <label>Apparent age<input id="npc_state_delta_edit_apparent_age" class="text_pole" maxlength="80" placeholder="~25, young, middle-aged..." value="${editorValue(npc.apparentAge)}"></label>
@@ -5371,6 +5413,7 @@ async function saveNpcEditor(npcId, { close = true, silent = false, popup = null
         background: String(editorField('npc_state_delta_edit_background')).trim().slice(0, 1200),
         mannerisms: cleanEditorList(editorField('npc_state_delta_edit_mannerisms'), 8),
         keyRelationships: cleanEditorList(editorField('npc_state_delta_edit_key_relationships'), KEY_RELATIONSHIP_LIMIT),
+        customFields: customFieldEditorValues(current),
     };
     const nameCollision = state.npcs.some((item, i) => i !== index && npcMatchesLabel(item, stableInputs.name));
     if (nameCollision) {
@@ -5438,13 +5481,15 @@ async function saveNpcEditor(npcId, { close = true, silent = false, popup = null
             turn: Number.isFinite(Number(state.turn)) ? Number(state.turn) : null,
         };
     }
-    const stableKeys = ['name', 'role', 'species', 'gender', 'homeBase', 'age', 'apparentAge', 'personality', 'speech', 'behaviorProfile', 'background', 'mannerisms', 'keyRelationships'];
+    const stableKeys = ['name', 'role', 'species', 'gender', 'homeBase', 'age', 'apparentAge', 'personality', 'speech', 'behaviorProfile', 'background', 'mannerisms', 'keyRelationships', 'customFields'];
     if (document.getElementById('npc_state_delta_edit_lock_profile')?.checked) {
         const locks = new Set(current.manualProfileFields || []);
         for (const key of stableKeys) {
             const listField = key === 'mannerisms' || key === 'behaviorProfile' || key === 'keyRelationships';
-            const before = listField ? JSON.stringify(current[key] || []) : String(current[key] || '');
-            const after = listField ? JSON.stringify(next[key] || []) : String(next[key] || '');
+            const before = key === 'customFields' ? JSON.stringify(normalizeCustomFields(current.customFields))
+                : (listField ? JSON.stringify(current[key] || []) : String(current[key] || ''));
+            const after = key === 'customFields' ? JSON.stringify(normalizeCustomFields(next.customFields))
+                : (listField ? JSON.stringify(next[key] || []) : String(next[key] || ''));
             if (before !== after) locks.add(key);
         }
         next.manualProfileFields = [...locks];
@@ -6084,6 +6129,16 @@ function bindSettingsCheckbox(selector, key, after = null) {
     });
 }
 
+function bindCustomFieldSettings() {
+    $(document).on('change.npcStateDelta', '#npc_state_delta_custom_fields', function () {
+        const names = normalizeCustomFieldNames(this.value);
+        getSettings().customFieldNames = names;
+        this.value = names.join(', ');
+        persistSettings();
+        updateInjection();
+    });
+}
+
 function bindSettingsNumber(selector, key, min, max, fallback, after = null) {
     $(document).on('change.npcStateDelta', selector, function () {
         const value = Math.max(min, Math.min(max, Math.round(Number(this.value) || fallback)));
@@ -6114,6 +6169,7 @@ function bindUi() {
     bindSettingsCheckbox('#npc_state_delta_inject', 'inject', updateInjection);
     bindSettingsNumber('#npc_state_delta_inject_budget', 'injectBudgetTokens', 512, 6000, 4000, updateInjection);
     bindSettingsCheckbox('#npc_state_delta_archive_deaths', 'autoArchiveDeaths');
+    bindCustomFieldSettings();
     bindSettingsCheckbox('#npc_state_delta_reactivate_archived', 'autoReactivateArchived');
     bindSettingsCheckbox('#npc_state_delta_branch_rescan', 'branchRescan');
     bindSettingsCheckbox('#npc_state_delta_mid_delete_rewind', 'midDeleteRewind');

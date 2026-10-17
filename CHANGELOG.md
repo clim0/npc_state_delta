@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.1.6 - 17 October 2026
+
+- When someone talks about a confirmed-dead NPC, the roleplay model now gets one short line about them (gender, role, a bond and how they died), so it no longer forgets they are dead or invents their death. Up to three per reply, sent even when nobody is present, and never at the cost of the present NPCs.
+- New **Custom fields** setting under Roster & continuity: name up to six fields (for example Level, Class) and every dossier tracks them. The scanner fills a value only when the story states it, keeps it while it is not mentioned, and changes it only when the story says so, so a returning NPC no longer comes back at a different level. Values are sent with present NPCs, shown on the dossier page, editable and lockable. With no fields named, nothing changes.
+
 ## 1.1.5 - 9 October 2026
 
 - New **Map** view in the dossier panel: you sit at the centre and each NPC's distance shows how they feel about you (Warmth, Trust, Affection, Desire or Tension), with Important Bonds drawn between NPCs and this turn's change marked. Choosing an NPC on the map selects their dossier, and **See on map** on the Player relationship card opens it. In-chat and active NPCs always appear, plus the strongest of the rest (24, or 16 on a phone); archived NPCs appear dimmed, and the dead and stale removals are left out. Two settings under Roster & continuity: Relationship map (on/off) and Default distance. The map is read-only.
