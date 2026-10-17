@@ -1,4 +1,5 @@
-// Present NPCs view, display only: a "now" line (mood · condition · outfit) on each present card,
+// Present NPCs view, display only: what each present NPC is like now (labelled Mood, Condition and
+// Outfit lines, 1.2.3; one "mood · condition · outfit" line in 1.2.2) on each present card,
 // and Story Block's NPC Inner Chatter shown as bubbles beside the speakers' cards. Everything
 // here is pure except fillPresentSceneText, which writes the shaped strings into slots with
 // textContent. Nothing reads or writes dossier state, prompts, scans or saved data; without Story
@@ -6,8 +7,11 @@
 import { normalizeName, npcNamedInText } from './core-mechanics.js';
 import { trimAtWord } from './suite-handshake.js';
 
-export const NOW_PART_MAX = 48;
-export const NOW_LINE_MAX = 120;
+// Each labelled now line shows up to NOW_PART_MAX characters (the card clamps it to two lines) and
+// carries up to NOW_TITLE_MAX in its tooltip, so a long mood or outfit stays readable.
+export const NOW_PART_MAX = 160;
+export const NOW_TITLE_MAX = 400;
+export const NOW_PARTS = Object.freeze([['mood', 'Mood'], ['condition', 'Condition'], ['outfit', 'Outfit']]);
 export const CHATTER_LINE_MAX = 240;
 export const CHATTER_LINE_LIMIT = 12;
 
@@ -50,22 +54,33 @@ function cleanSpeaker(head) {
     return plain(String(head).replace(/[*_]+/g, '').replace(QUOTES_AT_ENDS, ''));
 }
 
+// A leading article starts a name only before a capitalised word ("The Astral-Bound Spirit").
+const ARTICLES = new Set(['the', 'a', 'an']);
+export const SPEAKER_WORDS_MAX = 10;
+const SPEAKER_HEAD_MAX = 80;
+const KNOWN_SPEAKER_HEAD_MAX = 160;
+
 function nameLike(name) {
-    if (!name || name.length > 64 || !/^\p{L}/u.test(name) || NOT_A_NAME.test(name)) return false;
+    if (!name || name.length > SPEAKER_HEAD_MAX || !/^\p{L}/u.test(name) || NOT_A_NAME.test(name)) return false;
     if (/["“”]/.test(name)) return false;
     const words = name.split(/\s+/);
-    return words.length <= 6 && !NOT_A_FIRST_WORD.has(words[0].toLowerCase());
+    const first = words[0].toLowerCase();
+    if (words.length > SPEAKER_WORDS_MAX || NOT_A_FIRST_WORD.has(first)) return false;
+    return !ARTICLES.has(first) || /^\p{Lu}/u.test(words[1] || '');
 }
 
 function cleanLine(text) {
     return plain(String(text).replace(EMPHASIS_AT_ENDS, '').trim().replace(QUOTES_AT_ENDS, '').replace(EMPHASIS_AT_ENDS, ''));
 }
 
-/** One speaker head and line from `Name: line` (bold names, quotes and bullets tolerated), or null. */
-function readSpeakerLine(raw) {
+/**
+ * One speaker head and line from `Name: line` (bold names, quotes and bullets tolerated), or null.
+ * A head that is the name or alias of a known NPC (`known`: normalized names) is always a speaker.
+ */
+function readSpeakerLine(raw, known = new Set()) {
     const rest = stripBullet(raw);
     const colon = rest.search(/[:：]/);
-    if (colon <= 0 || colon > 64) return null;
+    if (colon <= 0 || colon > KNOWN_SPEAKER_HEAD_MAX) return null;
     const head = rest.slice(0, colon);
     let text = rest.slice(colon + 1);
     // `**Astra:** text`: the bold closes after the colon.
@@ -73,30 +88,36 @@ function readSpeakerLine(raw) {
     if (open && text.startsWith(open[1])) text = text.slice(open[1].length);
     if (text && !/^\s/.test(text)) return null;
     const speaker = cleanSpeaker(head);
-    if (!nameLike(speaker)) return null;
+    if (!(speaker && known.has(normalizeName(speaker))) && !nameLike(speaker)) return null;
     const line = cleanLine(text);
     return line ? { speaker, line } : null;
 }
 
 /**
- * NPC Inner Chatter as [{ speaker, line }] in the block's order: one `Name: line` per line. A
- * line that is not a speaker line continues the speaker above it; rules, placeholders and text
- * before the first speaker are left out. Never throws.
+ * NPC Inner Chatter as [{ speaker, line }] in the block's order: one `Name: line` per line.
+ * `names`: the present cards' and tracked NPCs' names and aliases, always accepted as speakers
+ * whatever their length or first word. A line that is not a speaker line continues the line above
+ * it; before any line it is kept with no speaker (shown under Others) rather than lost. Rules,
+ * placeholders and bare headings ("Inner chatter:") are left out. Never throws.
  */
-export function parseChatterLines(text) {
+export function parseChatterLines(text, { names = [] } = {}) {
     try {
+        if (typeof text !== 'string') return [];
+        const known = new Set((Array.isArray(names) ? names : []).map(name => normalizeName(name)).filter(Boolean));
         const out = [];
-        for (const raw of String(text ?? '').split(/\r?\n/)) {
+        for (const raw of text.split(/\r?\n/)) {
             const trimmed = raw.trim();
             if (!trimmed || RULE.test(trimmed) || PLACEHOLDER.test(trimmed)) continue;
-            const entry = readSpeakerLine(trimmed);
+            const entry = readSpeakerLine(trimmed, known);
             if (entry) {
                 if (out.length >= CHATTER_LINE_LIMIT) break;
                 out.push(entry);
                 continue;
             }
             const more = cleanLine(stripBullet(trimmed));
-            if (out.length && more) out[out.length - 1].line = `${out[out.length - 1].line} ${more}`;
+            if (!more) continue;
+            if (out.length) out[out.length - 1].line = `${out[out.length - 1].line} ${more}`;
+            else if (!/[:：]$/.test(more) && !NOT_A_NAME.test(more)) out.push({ speaker: '', line: more });
         }
         return out.map(entry => ({ speaker: entry.speaker, line: trimAtWord(entry.line, CHATTER_LINE_MAX) }));
     } catch {
@@ -174,10 +195,13 @@ export function matchPresentCard(name, cards = [], roster = []) {
     }
 }
 
-/** "mood · condition · outfit", each part and the whole line cut at a word with an ellipsis. */
-export function nowLine({ mood = '', condition = '', outfit = '' } = {}) {
-    const parts = [mood, condition, outfit].map(part => trimAtWord(plain(part), NOW_PART_MAX)).filter(Boolean);
-    return trimAtWord(parts.join(' · '), NOW_LINE_MAX);
+/** The labelled now lines with a value, in order: [{ key, label, text, title }], cut at a word. */
+export function nowParts(source = {}) {
+    const values = source && typeof source === 'object' ? source : {};
+    return NOW_PARTS.map(([key, label]) => {
+        const value = plain(values[key]);
+        return value ? { key, label, text: trimAtWord(value, NOW_PART_MAX), title: trimAtWord(value, NOW_TITLE_MAX) } : null;
+    }).filter(Boolean);
 }
 
 /** 'speech' when two or more people speak in the chatter, 'thought' for one, '' for none. */
@@ -202,8 +226,10 @@ function signatureOf(value) {
  * `cards`: [{ id, name, aliases, mood, condition, outfit }] (Delta's own tracked values).
  * `sceneText`: Story Block's World State for the latest reply, used only when `sceneOwned`.
  * `chatterText`: Story Block's NPC Inner Chatter for the latest reply.
- * Returns { now: { [id]: { text, source } }, kind, byCard: { [id]: [{ order, text }] },
- * others: [{ order, speaker, text }], texts: [string], signature } where every `text`/`speaker`
+ * Returns { now: { [id]: { parts: [{ key, label, text, title }], source } }, kind,
+ * byCard: { [id]: [{ order, text }] },
+ * others: [{ order, speaker, text }] (speaker null for a line with no speaker), texts: [string],
+ * signature } where every `text`/`speaker`
  * is an index into `texts`. Never throws.
  */
 export function presentSceneModel({ cards = [], roster = [], sceneText = '', sceneOwned = false, chatterText = '' } = {}) {
@@ -221,16 +247,23 @@ export function presentSceneModel({ cards = [], roster = [], sceneText = '', sce
         for (const card of list) {
             const id = plain(card.id);
             const section = fromWorld.get(id);
-            const text = nowLine(section || card);
-            if (text) model.now[id] = { text: slot(text), source: section ? 'world-state' : 'dossier' };
+            const parts = nowParts(section || card);
+            if (parts.length) {
+                model.now[id] = {
+                    parts: parts.map(part => ({ key: part.key, label: part.label, text: slot(part.text), title: slot(part.title) })),
+                    source: section ? 'world-state' : 'dossier',
+                };
+            }
         }
-        const lines = parseChatterLines(chatterText);
+        const names = [...list, ...(Array.isArray(roster) ? roster : [])]
+            .flatMap(npc => [npc?.name, ...(Array.isArray(npc?.aliases) ? npc.aliases : [])]);
+        const lines = parseChatterLines(chatterText, { names });
         model.kind = chatterBubbleKind(lines);
         lines.forEach((entry, index) => {
             const id = matchPresentCard(entry.speaker, list, roster);
             const order = index + 1;
             if (id) (model.byCard[id] ||= []).push({ order, text: slot(entry.line) });
-            else model.others.push({ order, speaker: slot(entry.speaker), text: slot(entry.line) });
+            else model.others.push({ order, speaker: entry.speaker ? slot(entry.speaker) : null, text: slot(entry.line) });
         });
     } catch (error) {
         console.warn('[NPC State Delta] present scene could not be shaped', error);
@@ -247,10 +280,15 @@ export function presentSceneModel({ cards = [], roster = [], sceneText = '', sce
 const escapeAttr = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const slotHtml = (tag, className, index) => `<${tag} class="${className}" data-delta-text="${Number(index)}"></${tag}>`;
 
-/** The empty now-line slot for a card (filled by fillPresentSceneText), or ''. */
+/**
+ * The empty now lines for a card (filled by fillPresentSceneText), or ''. Each line is its label
+ * plus a text slot; the line's tooltip slot receives the full text.
+ */
 export function nowSlotHtml(model, id) {
     const now = model?.now?.[id];
-    return now ? slotHtml('small', now.source === 'world-state' ? 'npc-state-delta-present-now npc-state-delta-present-now-world' : 'npc-state-delta-present-now', now.text) : '';
+    if (!now?.parts?.length) return '';
+    const lines = now.parts.map(part => `<span class="npc-state-delta-present-now-part npc-state-delta-present-now-${escapeAttr(part.key)}" data-delta-title="${Number(part.title)}"><span class="npc-state-delta-present-now-label">${escapeAttr(part.label)}:</span> ${slotHtml('span', 'npc-state-delta-present-now-text', part.text)}</span>`).join('');
+    return `<span class="${now.source === 'world-state' ? 'npc-state-delta-present-now npc-state-delta-present-now-world' : 'npc-state-delta-present-now'}">${lines}</span>`;
 }
 
 /** The bubbles beside one card: structure only, the text arrives through textContent. */
@@ -265,7 +303,7 @@ export function chatterSlotsHtml(model, id) {
 /** The "Others" line under the cards for chatter from names that match no present card, or ''. */
 export function othersSlotsHtml(model) {
     if (!model?.others?.length) return '';
-    const items = model.others.map(other => `<span class="npc-state-delta-chatter-other">${model.kind === 'speech' ? `<span class="npc-state-delta-bubble-order" aria-hidden="true">${Number(other.order)}</span>` : ''}${slotHtml('b', 'npc-state-delta-chatter-speaker', other.speaker)}${slotHtml('span', 'npc-state-delta-chatter-said', other.text)}</span>`).join('');
+    const items = model.others.map(other => `<span class="npc-state-delta-chatter-other">${model.kind === 'speech' ? `<span class="npc-state-delta-bubble-order" aria-hidden="true">${Number(other.order)}</span>` : ''}${other.speaker === null ? '' : slotHtml('b', 'npc-state-delta-chatter-speaker', other.speaker)}${slotHtml('span', 'npc-state-delta-chatter-said', other.text)}</span>`).join('');
     return `<p class="npc-state-delta-chatter-others ${model.kind === 'speech' ? 'npc-state-delta-chatter-speech' : 'npc-state-delta-chatter-thought'}"><span class="npc-state-delta-kicker">Others</span>${items}</p>`;
 }
 
@@ -288,7 +326,8 @@ export function rememberPresentScene(model) {
 
 /**
  * Write each remembered model's strings into its slots under `root` with textContent (never as
- * markup). Only changed text is written. Returns the number of slots written. Never throws.
+ * markup), and the now lines' full text into their title attribute. Only changed text is written.
+ * Returns the number of slots written. Never throws.
  */
 export function fillPresentSceneText(root) {
     let written = 0;
@@ -305,6 +344,14 @@ export function fillPresentSceneText(root) {
                 const value = model.texts[Number(node.getAttribute?.('data-delta-text') ?? node.dataset?.deltaText)] ?? '';
                 if (node.textContent !== value) {
                     node.textContent = value;
+                    written += 1;
+                }
+            }
+            for (const node of section.querySelectorAll?.('[data-delta-title]') || []) {
+                const value = model.texts[Number(node.getAttribute?.('data-delta-title') ?? node.dataset?.deltaTitle)] ?? '';
+                if ((node.getAttribute?.('title') ?? node.title) !== value) {
+                    if (typeof node.setAttribute === 'function') node.setAttribute('title', value);
+                    else node.title = value;
                     written += 1;
                 }
             }

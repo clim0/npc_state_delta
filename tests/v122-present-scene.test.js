@@ -6,7 +6,8 @@ import {
     chatterSlotsHtml,
     fillPresentSceneText,
     matchPresentCard,
-    nowLine,
+    NOW_PART_MAX,
+    nowParts,
     nowSlotHtml,
     othersSlotsHtml,
     parseChatterLines,
@@ -87,9 +88,34 @@ test('v1.2.2 chatter parses Name: line, tolerating bold names, quotes and dashes
         { speaker: 'Orrin', line: 'Keep your eyes on the road. and on the girl. Then she said: run' },
         { speaker: 'Megumin', line: 'Explosion! Note: this is not a person' },
     ], 'a line that is not a speaker line (or names "Note") continues the speaker above it');
-    assert.deepEqual(parseChatterLines('just prose with no speaker'), []);
     assert.deepEqual(parseChatterLines(null), []);
-    assert.deepEqual(parseChatterLines('http://example.com: not a name'), []);
+});
+
+test('v1.2.3 chatter: long known names are speakers, nothing before the first speaker is lost', () => {
+    const astral = 'The Astral-Bound Spirit of the Northern Vale';
+    const line = `${astral}: They followed us from the river.`;
+    assert.deepEqual(parseChatterLines(line, { names: [astral] }), [{ speaker: astral, line: 'They followed us from the river.' }],
+        'a tracked NPC\'s name is always a speaker, whatever its length or first word');
+    assert.deepEqual(parseChatterLines(`**${astral}:** *They followed us.*`, { names: ['Yunyun', astral] }), [{ speaker: astral, line: 'They followed us.' }]);
+    assert.deepEqual(parseChatterLines('The Astral-Bound Spirit of the Northern Vale: They followed us from the river.'),
+        [{ speaker: astral, line: 'They followed us from the river.' }], 'up to ten words, a leading "The" before a capitalised word');
+    assert.deepEqual(parseChatterLines('A Tall Stranger: Who goes there?'), [{ speaker: 'A Tall Stranger', line: 'Who goes there?' }]);
+    assert.deepEqual(parseChatterLines('the guard thinks this: halt'), [{ speaker: '', line: 'the guard thinks this: halt' }],
+        'an article before a lower-case word is no name, but the first line is kept without a speaker');
+    assert.deepEqual(parseChatterLines('One two three four five six seven eight nine ten eleven: no'), [{ speaker: '', line: 'One two three four five six seven eight nine ten eleven: no' }]);
+    assert.deepEqual(parseChatterLines('just prose with no speaker\nYunyun: Hi.'), [{ speaker: '', line: 'just prose with no speaker' }, { speaker: 'Yunyun', line: 'Hi.' }]);
+    assert.deepEqual(parseChatterLines('http://example.com: not a name'), [{ speaker: '', line: 'http://example.com: not a name' }]);
+    assert.deepEqual(parseChatterLines('**NPC Inner Chatter**\nInner chatter:\nWiz: Tea?'), [{ speaker: 'Wiz', line: 'Tea?' }], 'bare headings are left out');
+
+    const cast = [{ id: 'astral', name: astral, aliases: [] }, { id: 'yun', name: 'Yunyun', aliases: [] }];
+    const model = presentSceneModel({ cards: cast, chatterText: `${line}\nYunyun: It is beautiful.\nRiver Nymph of the Seven Silent Falls in Spring: Leave.` });
+    assert.equal(model.kind, 'speech');
+    assert.deepEqual(model.byCard.astral.map(entry => model.texts[entry.text]), ['They followed us from the river.'], 'the long name reaches its card');
+    const loose = presentSceneModel({ cards: cast, chatterText: 'Something stirs in the reeds.\nYunyun: Did you hear that?' });
+    assert.deepEqual(loose.others.map(other => [other.speaker, loose.texts[other.text]]), [[null, 'Something stirs in the reeds.']]);
+    const others = othersSlotsHtml(loose);
+    assert.match(others, /npc-state-delta-chatter-said/);
+    assert.doesNotMatch(others, /npc-state-delta-chatter-speaker/, 'no empty speaker label');
 });
 
 test('v1.2.2 World State people: name headers with outfit, mood and condition bullets', () => {
@@ -116,26 +142,32 @@ test('v1.2.2 names match cards by exact name or alias, then by a distinctive par
     assert.equal(matchPresentCard('', cards), '');
 });
 
-test('v1.2.2 now line: mood · condition · outfit, each part and the whole line ellipsized', () => {
-    assert.equal(nowLine({ mood: 'calm', condition: 'healthy', outfit: 'armor' }), 'calm · healthy · armor');
-    assert.equal(nowLine({ mood: '', condition: '', outfit: 'apron' }), 'apron');
-    assert.equal(nowLine({}), '');
-    const long = nowLine({ mood: 'quietly furious about the broken promise she was made at dawn', condition: 'limping badly after the fall from the old tower stairs', outfit: 'a rain-soaked travelling cloak over borrowed armor two sizes too large' });
-    assert.ok(long.length <= 120, long);
-    assert.match(long, /…/);
-    assert.equal(long.split(' · ')[0], 'quietly furious about the broken promise she…');
+test('v1.2.3 now lines: labelled Mood, Condition and Outfit, only those with a value, barely cut', () => {
+    const lines = parts => parts.map(part => [part.label, part.text]);
+    assert.deepEqual(lines(nowParts({ mood: 'calm', condition: 'healthy', outfit: 'armor' })), [['Mood', 'calm'], ['Condition', 'healthy'], ['Outfit', 'armor']]);
+    assert.deepEqual(lines(nowParts({ mood: '', condition: '', outfit: 'apron' })), [['Outfit', 'apron']]);
+    assert.deepEqual(nowParts({}), []);
+    assert.deepEqual(nowParts(null), []);
+    const mood = 'quietly furious about the broken promise she was made at dawn';
+    const [part] = nowParts({ mood });
+    assert.equal(part.text, mood, 'a long mood is no longer cut after 48 characters');
+    assert.equal(part.title, mood);
+    const huge = nowParts({ outfit: 'a rain-soaked travelling cloak over borrowed armor two sizes too large '.repeat(4) })[0];
+    assert.ok(huge.text.length <= NOW_PART_MAX && huge.text.endsWith('…'), huge.text);
+    assert.ok(huge.title.length > huge.text.length, 'the tooltip carries more than the clamped line');
 });
 
 test('v1.2.2 now line source: World State while Story Block keeps the scene, otherwise Delta\'s own', () => {
     const owned = presentSceneModel({ cards, sceneText: WORLD_STATE, sceneOwned: true });
-    const text = id => owned.texts[owned.now[id].text];
-    assert.deepEqual([text('yun'), owned.now.yun.source], ['nervous, hopeful · red ribbon, black robe', 'world-state']);
-    assert.deepEqual([text('orrin'), owned.now.orrin.source], ['stern · bandaged left arm', 'world-state']);
-    assert.deepEqual([text('wiz'), owned.now.wiz.source], ['cheerful · shop apron', 'dossier'], 'an NPC World State leaves empty keeps Delta\'s own line');
+    const text = (model, now) => now.parts.map(part => `${part.label}: ${model.texts[part.text]}`).join(' | ');
+    assert.deepEqual([text(owned, owned.now.yun), owned.now.yun.source], ['Mood: nervous, hopeful | Outfit: red ribbon, black robe', 'world-state']);
+    assert.deepEqual([text(owned, owned.now.orrin), owned.now.orrin.source], ['Mood: stern | Condition: bandaged left arm', 'world-state']);
+    assert.deepEqual([text(owned, owned.now.wiz), owned.now.wiz.source], ['Mood: cheerful | Outfit: shop apron', 'dossier'], 'an NPC World State leaves empty keeps Delta\'s own line');
+    assert.equal(owned.texts[owned.now.yun.parts[0].title], 'nervous, hopeful', 'each line has its full text for the tooltip');
 
     const own = presentSceneModel({ cards, sceneText: WORLD_STATE, sceneOwned: false });
-    assert.deepEqual(Object.values(own.now).map(now => [own.texts[now.text], now.source]), [
-        ['shy · travel cloak', 'dossier'], ['calm · healthy · armor', 'dossier'], ['cheerful · shop apron', 'dossier'],
+    assert.deepEqual(Object.values(own.now).map(now => [text(own, now), now.source]), [
+        ['Mood: shy | Outfit: travel cloak', 'dossier'], ['Mood: calm | Condition: healthy | Outfit: armor', 'dossier'], ['Mood: cheerful | Outfit: shop apron', 'dossier'],
     ], 'World State is not used while Delta keeps the scene');
 });
 
@@ -172,15 +204,90 @@ test('v1.2.2 chatter text never becomes markup: slots carry indexes, text arrive
     assert.doesNotMatch(html, /<img|<script|<b>|onerror/, 'no story text in the markup');
     assert.match(html, /data-delta-scene="[^"]+"/);
 
-    // A small DOM double: fill writes textContent, only where it changed.
-    const node = (attrs = {}) => ({ attrs, textContent: '', getAttribute: name => attrs[name] ?? null });
+    // A small DOM double: fill writes textContent (and the now lines' title), only where it changed.
+    const node = (attrs = {}) => ({ attrs, textContent: '', getAttribute: name => attrs[name] ?? null, setAttribute: (name, value) => { attrs[name] = String(value); } });
     const slots = [...html.matchAll(/data-delta-text="(\d+)"/g)].map(match => node({ 'data-delta-text': match[1] }));
-    const section = { getAttribute: name => (name === 'data-delta-scene' ? model.signature : null), matches: selector => selector === '[data-delta-scene]', querySelectorAll: selector => (selector === '[data-delta-text]' ? slots : []) };
-    assert.equal(fillPresentSceneText(section), slots.length);
+    const titled = [...html.matchAll(/data-delta-title="(\d+)"/g)].map(match => node({ 'data-delta-title': match[1] }));
+    assert.equal(titled.length, 1, 'one now line (Mood) for this card');
+    const section = { getAttribute: name => (name === 'data-delta-scene' ? model.signature : null), matches: selector => selector === '[data-delta-scene]', querySelectorAll: selector => (selector === '[data-delta-text]' ? slots : (selector === '[data-delta-title]' ? titled : [])) };
+    assert.equal(fillPresentSceneText(section), slots.length + titled.length);
     assert.deepEqual(slots.map(slot => slot.textContent), ['<b>bold</b>', `${hostile} <script>: x`, 'Stranger', hostile], '"<script>" is no name, so it continues the line above');
+    assert.equal(titled[0].attrs.title, '<b>bold</b>', 'the tooltip is an attribute value, never markup');
     assert.equal(fillPresentSceneText(section), 0, 'unchanged text is not rewritten');
     assert.equal(fillPresentSceneText(null), 0);
     assert.equal(fillPresentSceneText({ querySelectorAll() { throw new Error('boom'); } }), 0, 'never throws');
+});
+
+test('v1.2.3 the card shows labelled now lines that wrap to two lines, the name wraps too, full text in a tooltip', () => {
+    const model = presentSceneModel({ cards: [{ id: 'astral', name: 'The Astral-Bound Wanderer of the Northern Reach', mood: 'Curious; wary of the strangers at the gate', condition: '', outfit: 'starlit travelling cloak' }] });
+    const html = nowSlotHtml(model, 'astral');
+    assert.match(html, /^<span class="npc-state-delta-present-now">/);
+    assert.match(html, /npc-state-delta-present-now-mood" data-delta-title="\d+"><span class="npc-state-delta-present-now-label">Mood:<\/span> <span class="npc-state-delta-present-now-text" data-delta-text="\d+"><\/span>/);
+    assert.match(html, /npc-state-delta-present-now-outfit[^>]*><span class="npc-state-delta-present-now-label">Outfit:<\/span>/);
+    assert.doesNotMatch(html, /Condition:/, 'a part without a value has no line');
+    assert.doesNotMatch(html, /Curious|starlit/, 'the story text still arrives by textContent');
+    assert.equal(model.texts[model.now.astral.parts[0].text], 'Curious; wary of the strangers at the gate');
+
+    const css = fs.readFileSync(new URL('../style.css', import.meta.url), 'utf8');
+    const rule = selector => css.match(new RegExp(`\\n${selector.replace(/[.-]/g, '\\$&')} \\{([^}]*)\\}`))?.[1] || '';
+    for (const selector of ['.npc-state-delta-present-now-part', '.npc-state-delta-present-card-name']) {
+        assert.match(rule(selector), /-webkit-line-clamp: 2;/, `${selector} wraps to two lines`);
+        assert.doesNotMatch(rule(selector), /white-space: nowrap|text-overflow: ellipsis/, `${selector} is not cut to one line`);
+    }
+    assert.match(rule('.npc-state-delta-present-card-text'), /background: rgba\(5,6,8,\.62\)/, 'readable text in a footer under the portrait');
+    assert.doesNotMatch(css, /present-card-overlay/, 'no text over the portrait');
+    const index = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+    assert.match(index, /<span class="npc-state-delta-present-card-portrait">\$\{portrait\}<\/span>\s*<span class="npc-state-delta-present-card-text">/);
+    assert.match(index, /class="npc-state-delta-present-chip"/, 'the compact strip stays compact');
+});
+
+test('v1.2.3 narrow panes: compact full-row cards, half-row cards with a thumbnail header beside the bubble; very narrow puts the bubble under; wide keeps the grid', () => {
+    const css = fs.readFileSync(new URL('../style.css', import.meta.url), 'utf8');
+    assert.match(css, /\.npc-state-delta-present-roster \{[^}]*container-type: inline-size;[^}]*container-name: npc-present;/);
+    const blockOf = query => css.match(new RegExp(`@container npc-present \\(max-width: ${query}px\\) \\{([\\s\\S]*?)\\n\\}`))?.[1] || '';
+    const narrow = blockOf(520);
+    const tiny = blockOf(340);
+    assert.ok(narrow && tiny, 'both container blocks exist');
+    assert.ok(css.indexOf('@container npc-present (max-width: 520px)') > css.lastIndexOf('@media (max-width: 380px)'), 'after the screen-size rules they override');
+    assert.ok(css.indexOf('@container npc-present (max-width: 340px)') > css.indexOf('@container npc-present (max-width: 520px)'), 'the very narrow fallback wins');
+    const rule = (block, selector) => block.match(new RegExp(`\\.npc-state-delta-present-roster ${selector.replace(/[.-]/g, '\\$&')}(?:,\\n[^{]*)? \\{([^}]*)\\}`))?.[1] || '';
+    const half = '.npc-state-delta-present-cell-chatter .npc-state-delta-present-card';
+
+    // Full row (no chatter): a narrow portrait strip as tall as the text, the text in full.
+    assert.match(rule(narrow, '.npc-state-delta-present-grid'), /grid-template-columns: minmax\(0, 1fr\)/, 'one card per row');
+    assert.doesNotMatch(rule(narrow, '.npc-state-delta-present-cell'), /grid-template-columns/, 'without chatter the card takes the whole row');
+    assert.match(rule(narrow, '.npc-state-delta-present-card'), /flex-direction: row; align-items: stretch;/);
+    const strip = rule(narrow, '.npc-state-delta-present-card-portrait');
+    assert.match(strip, /flex: 0 0 84px; width: 84px; min-height: 96px; align-self: stretch; aspect-ratio: auto;/, 'height follows the text, no fixed 4:5');
+    assert.match(rule(narrow, '.npc-state-delta-present-card-portrait img'), /position: absolute; inset: 0;[^}]*object-fit: cover; object-position: center 18%;/, 'the image never sets the row height');
+    assert.match(rule(narrow, '.npc-state-delta-present-card-portrait .npc-state-delta-present-card-placeholder span'), /font-size: 1\.6rem/, 'the initial scales with the box');
+    assert.doesNotMatch(narrow, /\.npc-state-delta-present-roster \.npc-state-delta-present-card-placeholder/, 'the compact strip\'s chips are untouched');
+    assert.match(rule(narrow, '.npc-state-delta-present-card-name'), /line-clamp: none/, 'the name in full');
+    assert.match(rule(narrow, '.npc-state-delta-present-now-part'), /-webkit-line-clamp: unset; line-clamp: none; overflow: visible;/, 'Mood / Condition / Outfit in full');
+
+    // Half row (chatter): thumbnail beside the name, then role and now lines across the card.
+    assert.match(rule(narrow, '.npc-state-delta-present-cell-chatter'), /grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\)/, 'card half, bubble half');
+    assert.match(rule(narrow, half), /display: grid; grid-template-columns: 46px minmax\(0, 1fr\);/);
+    assert.match(rule(narrow, `${half}-portrait`), /grid-column: 1; grid-row: 1; width: 46px; height: 46px; min-height: 0; aspect-ratio: 1 \/ 1;/, 'no portrait block on top');
+    assert.match(rule(narrow, `${half}-portrait .npc-state-delta-present-card-placeholder span`), /font-size: 1\.15rem/);
+    assert.match(rule(narrow, `${half}-text`), /display: contents/);
+    assert.match(rule(narrow, `${half}-name`), /grid-column: 2; grid-row: 1; -webkit-line-clamp: 2;/, 'the name wraps beside the thumbnail, two lines at most');
+    assert.match(narrow, /present-cell-chatter \.npc-state-delta-present-card-role,\n[^{]*present-cell-chatter \.npc-state-delta-present-now \{ grid-column: 1 \/ -1; \}/, 'role and now lines under the header, across the card');
+    assert.match(rule(narrow, '.npc-state-delta-present-cell'), /align-items: start/, 'the bubble aligns to the top of the row');
+    assert.match(rule(narrow, '.npc-state-delta-chatter-speech .npc-state-delta-bubble::before'), /left: -7px;[^}]*border-right-color/, 'the pointer points left, at the card');
+    assert.match(rule(narrow, '.npc-state-delta-chatter-thought .npc-state-delta-bubble::after'), /left: -19px/);
+    assert.match(rule(narrow, '.npc-state-delta-chatter-other'), /border-radius: 12px;/, 'Others are bubbles with the speaker inside');
+
+    // Very narrow: same compact card, the bubble under it, pointing up.
+    assert.match(rule(tiny, '.npc-state-delta-present-cell-chatter'), /grid-template-columns: minmax\(0, 1fr\)/);
+    assert.doesNotMatch(tiny, /present-card/, 'the compact header is kept');
+    assert.match(rule(tiny, '.npc-state-delta-chatter-speech .npc-state-delta-bubble::before'), /top: -7px;[^}]*border-bottom-color/);
+
+    // Wide: the card grid, the chatter under its card in the same cell.
+    assert.match(css, /\.npc-state-delta-present-cell \{ display: grid; grid-template-columns: minmax\(0, 1fr\);/);
+    assert.match(css, /\n\.npc-state-delta-present-card-portrait \{[^}]*aspect-ratio: 4 \/ 5;/, 'wide cards keep their 4:5 portrait');
+    assert.match(css, /\n\.npc-state-delta-chatter-speech \.npc-state-delta-bubble::before \{[^}]*top: -7px;/);
+    assert.doesNotMatch(css, /@media \(min-width: 701px\) \{/, 'no stretched side-by-side cell on wide screens');
 });
 
 test('v1.2.2 a malformed scene shapes to nothing instead of throwing', () => {
@@ -203,7 +310,8 @@ test('v1.2.2 the present cards render now/chatter slots and the Story Block tab 
     assert.match(tabs, /pane\.innerHTML = html;[\s\S]*api\.fillPresentCast\?\.\(pane\)/);
     assert.match(tabs, /storyBlock\.onUpdate\?\.\(\(\) => api\.renderInline\?\.\(\)\)/);
     const css = fs.readFileSync(new URL('../style.css', import.meta.url), 'utf8');
-    assert.match(css, /@media \(min-width: 701px\) \{\s*\.npc-state-delta-present-cell-chatter \{ grid-column: span 2;/, 'wide: the bubble sits beside the card');
+    assert.doesNotMatch(css, /grid-column: span 2/, 'wide: the bubble sits under its card, not in a stretched two-column cell');
+    assert.match(index, /return `<div class="npc-state-delta-present-cell\$\{chatter \? ' npc-state-delta-present-cell-chatter' : ''\}" data-npc-id="\$\{escapeHtml\(npc\.id\)\}"[^`]*>\$\{card\}\$\{chatter\}<\/div>`/, 'one cell per NPC, card then chatter');
     assert.match(css, /\.npc-state-delta-chatter-thought \.npc-state-delta-bubble \{[^}]*font-style: italic; opacity: \.86;/);
     assert.match(css, /\.npc-state-delta-chatter-thought \.npc-state-delta-bubble::after \{ width: 5px; height: 5px;/, 'trailing thought circles');
 });
