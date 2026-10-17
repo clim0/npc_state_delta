@@ -151,6 +151,8 @@ export function dossierDetailProjection(npc = {}, portraitAssets = {}, formPortr
         background: plain(npc?.background),
         memories: stringList(npc?.memories, 8),
         keyRelationships: stringList(npc?.keyRelationships, 12),
+        customFields: Object.entries(npc?.customFields && typeof npc.customFields === 'object' ? npc.customFields : {})
+            .map(([name, value]) => [plain(name), plain(value)]).filter(([name, value]) => name && value).slice(0, 12),
         relationshipSummary: plain(npc?.relationshipSummary),
         lastRelationshipChange: relationshipChangeProjection(npc?.lastRelationshipChange),
         fieldChanges: fieldChangesProjection(npc?.fieldChanges),
@@ -861,6 +863,7 @@ class DeltaDossierUi {
                 <div class="delta-current-grid">
                     ${birthdayCard(selected)}
                     ${currentCard('Home Base / Usual Location', selected.homeBase, 'Unknown', changedMark(selected, 'homeBase'))}
+                    ${selected.customFields.map(([name, value]) => currentCard(name, value, '')).join('')}
                 </div>
             </section>
             <section class="delta-section" data-delta-section="current">

@@ -151,7 +151,12 @@ test('older manual fallback does not reverse accepted canonical age on a later d
     assert.equal(result.state.npcs[0].age, '7');
     for (const extra of [{ manualProfileFields: ['age'], manualProfileLocksExplicit: true }, { lifeState: 'deceased', lifeStateCertainty: 'explicit' }]) {
         const locked = { ...npc, age: '5', present: true, ...extra };
-        if (extra.lifeState) assert.equal(buildInjection([locked], 'Mira is here.', 1, 3), '');
+        // Since 1.1.6 a named dead NPC gets only the deceased reference line, never a dossier block.
+        if (extra.lifeState) {
+            const injected = buildInjection([locked], 'Mira is here.', 1, 3);
+            assert.doesNotMatch(injected, /IDENTITY \(authoritative\)/);
+            assert.match(injected, /DECEASED, REFERENCED ONLY[\s\S]*- Mira \(deceased\)/);
+        }
         else assert.match(buildInjection([locked], 'Mira is here.', 1, 3), /5/);
     }
 });

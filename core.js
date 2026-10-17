@@ -1792,19 +1792,37 @@ export function buildInjection(npcs, text, turn = 0, limit = 3, behaviorCriteria
     return continuity.buildInjection(projected, text, turn, limit, behaviorCriteria, budgetTokens, socialGraph, options);
 }
 
+// User-defined custom fields (settings) add one rule and the current values of the NPCs in play.
+// With no fields configured the prompt is unchanged.
+function appendCustomFieldRule(prompt, options = {}) {
+    const names = mechanics.normalizeCustomFieldNames(options.customFieldNames);
+    if (!names.length) return prompt;
+    const roster = Array.isArray(options.existingNpcs) ? options.existingNpcs : [];
+    const targets = options.targetNpc ? [options.targetNpc]
+        : (options.existingNpc ? [options.existingNpc]
+            : roster.filter(npc => npc?.present || mechanics.npcNamedInText(npc, options.transcript || '', roster)));
+    const known = Object.fromEntries(targets.slice(0, 12)
+        .map(npc => [npc?.id, mechanics.customFieldValues(npc, names)])
+        .filter(([id, values]) => id && Object.keys(values).length));
+    const example = Object.fromEntries(names.slice(0, 2).map(name => [name, 'value']));
+    return `${prompt}
+
+CUSTOM FIELDS (${names.join(', ')}): in an NPC row, "customFields":${JSON.stringify(example)} only when the story or World State states that NPC's value explicitly. Keep-by-default: omit unchanged or unknown values; a changed established value needs "customFieldsReason". Never guess.${Object.keys(known).length ? `\nEstablished custom fields: ${JSON.stringify(known)}` : ''}`;
+}
+
 export function buildScannerPrompt(options = {}) {
     const prompt = strengthenRoutineApparentAgeRule(continuity.buildScannerPrompt(calendarPromptOptions(options)));
-    return appendBirthdayRule(prompt, options);
+    return appendCustomFieldRule(appendBirthdayRule(prompt, options), options);
 }
 export function buildBackfillPrompt(options = {}) {
-    return appendBirthdayRule(continuity.buildBackfillPrompt(calendarPromptOptions(options)), options);
+    return appendCustomFieldRule(appendBirthdayRule(continuity.buildBackfillPrompt(calendarPromptOptions(options)), options), options);
 }
 export function buildDossierImportPrompt(options = {}) {
     return appendBirthdayRule(continuity.buildDossierImportPrompt(calendarPromptOptions(options)), options);
 }
 export function buildProfileRefreshPrompt(options = {}) {
-    return insertRefreshBirthdayRule(continuity.buildProfileRefreshPrompt(calendarPromptOptions(options)), options);
+    return appendCustomFieldRule(insertRefreshBirthdayRule(continuity.buildProfileRefreshPrompt(calendarPromptOptions(options)), options), options);
 }
 
 // NPC State Delta application version. Persisted bundle, branch, and data schemas are versioned independently.
-export const NPC_STATE_VERSION = '1.1.5';
+export const NPC_STATE_VERSION = '1.1.6';
