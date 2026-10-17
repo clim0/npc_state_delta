@@ -171,6 +171,47 @@
 }
 .npc-state-delta-megumin-tab { touch-action: manipulation; }
 
+/* Story Block tabs (story-block-tabs.js): the cast reuses the cards below; the dossier list is a
+   search box over compact rows. Tapping a row opens the launcher dossier. */
+.npc-state-delta-story-empty { margin: 4px 2px; opacity: .65; font-size: .85rem; }
+.npc-state-delta-story-dossiers { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.npc-state-delta-story-search { width: 100%; box-sizing: border-box; margin: 0; }
+.npc-state-delta-story-list { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.npc-state-delta-story-row {
+  appearance: none;
+  -webkit-appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 5px 7px;
+  border: 1px solid rgba(216, 190, 145, .18);
+  border-radius: 9px;
+  background: rgba(245, 238, 220, .05);
+  color: var(--SmartThemeBodyColor, #ddd);
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.npc-state-delta-story-row:hover, .npc-state-delta-story-row:focus-visible { border-color: rgba(216, 188, 120, .6); }
+.npc-state-delta-story-thumb {
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 50%;
+  background: rgba(0,0,0,.28);
+  font-weight: 600;
+}
+.npc-state-delta-story-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.npc-state-delta-story-text { display: flex; flex-direction: column; min-width: 0; }
+.npc-state-delta-story-text b, .npc-state-delta-story-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npc-state-delta-story-text small { opacity: .62; font-size: .74rem; }
+
 /* Present NPCs in chat (full cards and compact strip). Tapping either opens the launcher dossier. */
 .npc-state-delta-present-roster {
   --npc-paper: rgba(245, 238, 220, .08);

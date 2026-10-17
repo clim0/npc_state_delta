@@ -1,4 +1,4 @@
-/* NPC State Delta v1.1.10 bootstrap. */
+/* NPC State Delta v1.1.11 bootstrap. */
 import { prepareNpcStateHardening } from './hardening.js';
 
 await prepareNpcStateHardening();
@@ -39,6 +39,11 @@ try {
     await import('./relationship-map.js');
 } catch (error) {
     console.error('[NPC State Delta] relationship map failed to load', error);
+}
+try {
+    await import('./story-block-tabs.js');
+} catch (error) {
+    console.error('[NPC State Delta] Story Block tabs failed to load', error);
 }
 try {
     await import('./continuity-ui.js');
