@@ -7,6 +7,8 @@ import { dossierIndexProjection, filterDossierIndex } from './dossier-ui.js';
 export const STORY_BLOCK_TAB_IDS = Object.freeze({ cast: 'npc-state-delta-cast', dossiers: 'npc-state-delta-dossiers' });
 const CONNECTED_FLAG = 'npcStateDeltaStoryBlock';
 const EMPTY_CAST = '<p class="npc-state-delta-story-empty">No NPC is present in the latest scene.</p>';
+// Story Block's panes add no padding of their own around another extension's content.
+const paneHtml = html => `<div class="npc-state-delta-story-pane">${html}</div>`;
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 
@@ -40,7 +42,7 @@ export function connectStoryBlock(api, storyBlock) {
         return rows;
     };
     const renderCast = pane => {
-        const html = String(api.presentCastHtml?.() || '') || EMPTY_CAST;
+        const html = paneHtml(String(api.presentCastHtml?.() || '') || EMPTY_CAST);
         if (pane.__npcStateDeltaCast !== html) {
             pane.innerHTML = html;
             pane.__npcStateDeltaCast = html;
@@ -48,7 +50,7 @@ export function connectStoryBlock(api, storyBlock) {
     };
     const renderDossiers = pane => {
         if (!pane.__npcStateDeltaDossiers) {
-            pane.innerHTML = '<div class="npc-state-delta-story-dossiers"><input type="search" class="text_pole npc-state-delta-story-search" placeholder="Search dossiers" aria-label="Search dossiers"><div class="npc-state-delta-story-list"></div></div>';
+            pane.innerHTML = paneHtml('<div class="npc-state-delta-story-dossiers"><input type="search" class="text_pole npc-state-delta-story-search" placeholder="Search dossiers" aria-label="Search dossiers"><div class="npc-state-delta-story-list"></div></div>');
             const input = pane.querySelector('.npc-state-delta-story-search');
             if (input) input.value = query;
             input?.addEventListener?.('input', () => {

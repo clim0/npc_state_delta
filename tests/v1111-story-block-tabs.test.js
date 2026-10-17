@@ -73,7 +73,7 @@ test('v1.1.11 the Present NPCs tab shows the live cast and rewrites only on chan
     connectStoryBlock(runtime, { registerTab: tab => tabs.push(tab) });
     const pane = fakePane();
     tabs[0].render(pane, { messageId: 4 });
-    assert.equal(pane.innerHTML, runtime.cast);
+    assert.equal(pane.innerHTML, `<div class="npc-state-delta-story-pane">${runtime.cast}</div>`, 'wrapped in a padded pane: Story Block adds none');
     tabs[0].render(pane, { messageId: 4 });
     assert.equal(pane.writes, 1, 'an unchanged cast is not rewritten on Story Block refreshes');
     runtime.cast = '';
@@ -195,8 +195,19 @@ test('v1.1.11 with Story Block, Only in Story Block clears the chat cast and the
         mockState.storyBlockTabs[0].render(pane, { messageId: id });
         assert.match(pane.innerHTML, /Yunyun/);
 
+        // Until the player picks a choice, the default Full cards stays out of the chat while Story
+        // Block carries the cast; an explicit Full (or Compact) keeps the in-chat cast.
+        settings.presentCastDisplay = 'full';
+        settings.presentCastDisplayChosen = false;
+        api.renderInline();
+        assert.equal(inlineAnchors.some(anchor => anchor.dataset.npcStateDeltaMessageId === String(id)), false, 'the unchosen default is not shown twice');
+        settings.presentCastDisplay = 'compact';
+        api.renderInline();
+        assert.ok(inlineAnchors.some(anchor => anchor.dataset.npcStateDeltaMessageId === String(id)), 'Compact is always a deliberate choice');
+
         // Story Block's compatible card carries Megumin's classes; Delta must not add its Megumin tab too.
         settings.presentCastDisplay = 'full';
+        settings.presentCastDisplayChosen = true;
         const compat = createMockMeguminBlock();
         compat.card.className = 'story-block-card meg-blocks';
         meguminBlocks.set(id, compat);
@@ -209,4 +220,14 @@ test('v1.1.11 with Story Block, Only in Story Block clears the chat cast and the
         api.renderInline();
         assert.ok(compat.card.querySelector('.npc-state-delta-megumin-tab'), 'Megumin Suite cards keep the integrated tab');
     });
+});
+
+test('v1.1.12 a choice made in settings is remembered; the Story Block pane is padded and keeps cards small', () => {
+    const index = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+    const css = fs.readFileSync(new URL('../style.css', import.meta.url), 'utf8');
+    assert.match(index, /presentCastDisplayChosen: false,/);
+    assert.match(index, /getSettings\(\)\.presentCastDisplayChosen = true;/, 'picking any choice marks it deliberate');
+    assert.match(index, /\$\('#npc_state_delta_present_cast_display'\)\.val\(effectivePresentCastChoice\(\)\)/, 'the menu shows the choice in effect');
+    assert.match(css, /\.npc-state-delta-story-pane \{ padding: 8px 12px 12px;/);
+    assert.match(css, /\.npc-state-delta-story-pane \.npc-state-delta-present-grid \{ grid-template-columns: repeat\(auto-fill, minmax\(104px, 1fr\)\); \}/);
 });

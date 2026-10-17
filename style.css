@@ -173,6 +173,8 @@
 
 /* Story Block tabs (story-block-tabs.js): the cast reuses the cards below; the dossier list is a
    search box over compact rows. Tapping a row opens the launcher dossier. */
+.npc-state-delta-story-pane { padding: 8px 12px 12px; box-sizing: border-box; min-width: 0; }
+.npc-state-delta-story-pane .npc-state-delta-present-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
 .npc-state-delta-story-empty { margin: 4px 2px; opacity: .65; font-size: .85rem; }
 .npc-state-delta-story-dossiers { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .npc-state-delta-story-search { width: 100%; box-sizing: border-box; margin: 0; }

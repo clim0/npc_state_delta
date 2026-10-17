@@ -493,6 +493,7 @@ const DEFAULTS = Object.freeze({
     branchRescan: true,
     midDeleteRewind: false,
     presentCastDisplay: 'full',
+    presentCastDisplayChosen: false,
     relationshipBaseline: { ...DEFAULT_RELATIONSHIP },
     relationshipCaps: { ...DEFAULT_RELATIONSHIP_CAPS },
     relationshipCriteria: DEFAULT_RELATIONSHIP_CRITERIA,
@@ -560,6 +561,7 @@ function getSettings() {
     assign('behaviorCriteria', typeof settings.behaviorCriteria === 'string' ? settings.behaviorCriteria : DEFAULT_BEHAVIOR_CRITERIA);
     assign('admissionMode', normalizeNpcAdmissionMode(settings.admissionMode));
     assign('presentCastDisplay', normalizePresentCastDisplay(settings.presentCastDisplay));
+    assign('presentCastDisplayChosen', settings.presentCastDisplayChosen === true);
     // 1.0.70 raised the default budget from 1800 to 4000 tokens. An install still on the old default
     // is moved once; any value the player chose, including a later deliberate 1800, is kept.
     const legacyDefaultBudget = settings.injectBudgetDefaultUpgraded !== true && Number(settings.injectBudgetTokens) === 1800;
@@ -4118,7 +4120,7 @@ function buildSettingsHtml() {
     ].join('');
     const roster = `
         <h4 class="delta-settings-subhead">In-chat display</h4>
-        ${settingRow('npc_state_delta_present_cast_display', 'Present NPCs in chat', '<select id="npc_state_delta_present_cast_display" class="text_pole"><option value="full">Full cards</option><option value="compact">Compact strip</option><option value="storyblock">Only in Story Block</option><option value="off">Off</option></select>', 'Shown under the latest reply (or as a Megumin tab). With Story Block installed, Present NPCs and Dossiers tabs also appear in its sidebar; Only in Story Block keeps the chat clear (full cards without Story Block). Tapping an NPC opens its dossier. Off adds nothing to the chat; presence tracking and injection are unaffected.')}
+        ${settingRow('npc_state_delta_present_cast_display', 'Present NPCs in chat', '<select id="npc_state_delta_present_cast_display" class="text_pole"><option value="full">Full cards</option><option value="compact">Compact strip</option><option value="storyblock">Only in Story Block</option><option value="off">Off</option></select>', 'Shown under the latest reply (or as a Megumin tab). With Story Block installed, Present NPCs and Dossiers tabs also appear in its sidebar, and until you pick a choice here the chat shows them only there; Only in Story Block keeps the chat clear (full cards without Story Block). Tapping an NPC opens its dossier. Off adds nothing to the chat; presence tracking and injection are unaffected.')}
         <h4 class="delta-settings-subhead">Generation injection</h4>
         ${settingRow('npc_state_delta_inject', 'Inject present NPC state', '<input id="npc_state_delta_inject" type="checkbox">', 'Only active NPCs present in the latest scanned scene are injected into generation.')}
         ${settingRow('npc_state_delta_inject_budget', 'Injection budget', numberControl('npc_state_delta_inject_budget', 512, 6000, 'tokens', { step: 100, prefix: '<small>~</small>' }), 'Upper limit; only what the present NPCs need is used. The default 4000 lets detailed dossiers reach the roleplay model in full. When it runs short, lower-priority fields, then lower-ranked NPCs, are trimmed first.')}
@@ -4307,7 +4309,7 @@ function syncSettingsControls() {
     $('#npc_state_delta_reactivate_archived').prop('checked', s.autoReactivateArchived !== false);
     $('#npc_state_delta_branch_rescan').prop('checked', s.branchRescan !== false);
     $('#npc_state_delta_mid_delete_rewind').prop('checked', s.midDeleteRewind === true);
-    $('#npc_state_delta_present_cast_display').val(presentCastDisplayMode());
+    $('#npc_state_delta_present_cast_display').val(effectivePresentCastChoice());
     if (!portraitSettingsDirty) writePortraitSettingsDraftToUi(portraitSettingsSnapshot(s));
     updatePortraitSettingsSaveUi();
     $('#npc_state_delta_base_trust').val(s.relationshipBaseline.trust);
@@ -4581,10 +4583,18 @@ function storyBlockTabsActive() {
     return document?.documentElement?.dataset?.npcStateDeltaStoryBlock === '1';
 }
 
+// The choice in effect. Until the player picks one, Full cards becomes "Only in Story Block" while
+// Story Block carries the cast, so it is not shown twice. Compact and Off are always deliberate.
+function effectivePresentCastChoice() {
+    const mode = presentCastDisplayMode();
+    const chosen = getSettings().presentCastDisplayChosen === true || mode !== 'full';
+    return !chosen && storyBlockTabsActive() ? 'storyblock' : mode;
+}
+
 // What the chat itself shows. "Only in Story Block" hides the in-chat cast while the Story Block tab
 // carries it, and falls back to full cards when Story Block is not installed.
 function inChatCastMode() {
-    const mode = presentCastDisplayMode();
+    const mode = effectivePresentCastChoice();
     if (mode !== 'storyblock') return mode;
     return storyBlockTabsActive() ? 'off' : 'full';
 }
@@ -6495,7 +6505,9 @@ function bindUi() {
     bindSettingsNumber('#npc_state_delta_scan_every', 'scanEvery', 1, 20, 2);
     bindSettingsNumber('#npc_state_delta_scan_depth', 'scanDepth', 2, 30, 6);
     $(document).on('change.npcStateDelta', '#npc_state_delta_present_cast_display', function () {
-        getSettings().presentCastDisplay = normalizePresentCastDisplay(this.value); this.value = getSettings().presentCastDisplay; persistSettings();
+        getSettings().presentCastDisplay = normalizePresentCastDisplay(this.value); this.value = getSettings().presentCastDisplay;
+        getSettings().presentCastDisplayChosen = true;
+        persistSettings();
         startInlineWatchdog();
         queueInlineRender(0);
     });
