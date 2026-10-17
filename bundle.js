@@ -405,6 +405,7 @@ const IMPORT_LOCKED_FIELD_KEYS = Object.freeze({
     mannerisms: ['mannerisms'],
     keyRelationships: ['keyRelationships'],
     customFields: ['customFields'],
+    aliases: ['aliases'],
 });
 
 function preserveTargetManualLocks(oldNpc, importedNpc) {

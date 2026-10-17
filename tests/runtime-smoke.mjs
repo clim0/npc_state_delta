@@ -457,8 +457,9 @@ try {
     eventSource.emit('message_sent', 1);
     await sleep(20);
     const preview = globalThis.NPCStateDelta.injectionPreview();
-    assert.equal(preview.sending, false, 'an off-screen NPC the pending message does not name is not injected');
-    assert.ok(preview.reason.length > 0, 'an empty injection explains why');
+    // Since 1.1.7 her earlier mention, still in the recent window, gives only a reference line.
+    assert.deepEqual(preview.injectedNpcs, [], 'an off-screen NPC the pending message does not name gets no dossier block');
+    assert.ok(!preview.sending || preview.referencedNpcs.includes('Yunyun'), 'at most her reference line is sent');
     assert.deepEqual(preview.presentNpcs, []);
     mockState.context.chat.pop();
     await globalThis.NPCStateDelta.flush();
