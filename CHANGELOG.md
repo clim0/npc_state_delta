@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.1.12 - 17 October 2026
+
+- With Story Block installed, the present cast no longer shows twice by default: until you pick a choice under **Present NPCs in chat**, the cards appear only in Story Block's tab. Picking Full cards or Compact strip keeps them in the chat too, and Delta remembers that choice. (Compact and Off were already kept. Full cards had always been saved as the default, so if you want it alongside Story Block, pick it once.)
+- The Present NPCs and Dossiers tabs now have proper margins inside Story Block's sheet and sidebar, the "shown" count is no longer cut off, and the cards are sized for the narrower pane (three across on a phone).
+
 ## 1.1.11 - 17 October 2026
 
 - With Story Block installed, Delta adds **Present NPCs** and **Dossiers** tabs to Story Block's sidebar and card, so the cast and every dossier sit beside your inventory and World State. The Dossiers tab has a search box (the dead appear only when searched for) and opens a dossier on tap. A new **Only in Story Block** choice under Present NPCs in chat keeps the chat clear and shows full cards when Story Block isn't installed. Display only: prompts, scans and saved data are unchanged, and nothing changes without Story Block.
