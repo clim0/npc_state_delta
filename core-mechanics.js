@@ -5915,11 +5915,10 @@ export const DEFAULT_INJECTION_BUDGET_TOKENS = 4000;
 // Section caps are sized for this budget and grow in proportion above it (see buildInjection).
 const INJECTION_CAP_BASE_TOKENS = 1800;
 export const MIN_INJECTION_BUDGET_TOKENS = 512;
-export const MAX_INJECTION_BUDGET_TOKENS = 6000;
 const APPROX_CHARS_PER_TOKEN = 4;
 
 export function normalizeInjectionBudgetTokens(value) {
-    return Math.max(MIN_INJECTION_BUDGET_TOKENS, Math.min(MAX_INJECTION_BUDGET_TOKENS, Math.round(Number(value) || DEFAULT_INJECTION_BUDGET_TOKENS)));
+    return Math.max(MIN_INJECTION_BUDGET_TOKENS, Math.round(Number(value) || DEFAULT_INJECTION_BUDGET_TOKENS));
 }
 
 export function estimateInjectionTokens(text) {

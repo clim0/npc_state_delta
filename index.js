@@ -634,8 +634,9 @@ function getSettings() {
     // 1.0.70 raised the default budget from 1800 to 4000 tokens. An install still on the old default
     // is moved once; any value the player chose, including a later deliberate 1800, is kept.
     const legacyDefaultBudget = settings.injectBudgetDefaultUpgraded !== true && Number(settings.injectBudgetTokens) === 1800;
-    assign('injectBudgetTokens', legacyDefaultBudget ? 4000 : Math.max(512, Math.min(6000, Math.round(Number(settings.injectBudgetTokens) || 4000))));
+    assign('injectBudgetTokens', legacyDefaultBudget ? 4000 : Math.max(512, Math.round(Number(settings.injectBudgetTokens) || 4000)));
     assign('injectBudgetDefaultUpgraded', true);
+    assign('injectLimit', Math.max(1, Math.min(100, Math.round(Number(settings.injectLimit) || 3))));
     const legacyDefaultDepth = settings.injectDepthTailUpgraded !== true && Number(settings.injectDepth) === 1;
     assign('injectDepth', legacyDefaultDepth ? 0 : injectDepthOf(settings));
     assign('injectDepthTailUpgraded', true);
@@ -4334,7 +4335,7 @@ function settingRow(id, label, control, hint = '') {
 }
 
 function numberControl(id, min, max, unit = '', { step = '', prefix = '' } = {}) {
-    return `<span class="delta-setting-number story-suite-number">${prefix}<input id="${id}" type="number" min="${min}" max="${max}"${step ? ` step="${step}"` : ''} class="text_pole npc-state-delta-number">${unit ? `<small>${unit}</small>` : ''}</span>`;
+    return `<span class="delta-setting-number story-suite-number">${prefix}<input id="${id}" type="number" min="${min}"${max != null ? ` max="${max}"` : ''}${step ? ` step="${step}"` : ''} class="text_pole npc-state-delta-number">${unit ? `<small>${unit}</small>` : ''}</span>`;
 }
 
 function settingsGroup(key, title, hint, body) {
@@ -4388,7 +4389,8 @@ function buildSettingsHtml() {
     const advanced = [
         settingRow('npc_state_delta_scan_depth', 'Scan context', numberControl('npc_state_delta_scan_depth', 2, 30, 'messages'), 'History window for full, manual and Refresh scans. Quick automatic scans read only the latest user + assistant exchange.'),
         settingsSlot('scanner-output'),
-        settingRow('npc_state_delta_inject_budget', 'Injection budget', numberControl('npc_state_delta_inject_budget', 512, 6000, 'tokens', { step: 100, prefix: '<small>~</small>' }), 'Upper limit; only what the present NPCs need is used. The default 4000 lets detailed dossiers reach the roleplay model in full. When it runs short, lower-priority fields, then lower-ranked NPCs, are trimmed first.'),
+        settingRow('npc_state_delta_inject_budget', 'Injection budget', numberControl('npc_state_delta_inject_budget', 512, null, 'tokens', { step: 100, prefix: '<small>~</small>' }), 'Upper limit; only what the present NPCs need is used. The default 4000 lets detailed dossiers reach the roleplay model in full. When it runs short, lower-priority fields, then lower-ranked NPCs, are trimmed first.'),
+        settingRow('npc_state_delta_inject_limit', 'Maximum injected NPCs', numberControl('npc_state_delta_inject_limit', 1, 100), 'How many present NPCs, highest relevance first, can be injected into a single generation.'),
         settingRow('npc_state_delta_mid_delete_rewind', 'Rewind dossiers on middle deletion', '<input id="npc_state_delta_mid_delete_rewind" type="checkbox">', 'Off (default): deleting a message from the middle undoes only what that message changed and keeps later changes. On: every dossier rewinds to how it was just before the deleted message, discarding what later messages changed (no model requests).'),
         settingRow('npc_state_delta_branch_rescan', 'Rescan changed branches', '<input id="npc_state_delta_branch_rescan" type="checkbox">', 'Re-evaluate the surviving branch after a swipe, edit or middle-message deletion.'),
     ].join('');
@@ -4611,6 +4613,7 @@ function syncSettingsControls() {
     $('#npc_state_delta_stale_delete_after').val(s.staleDeleteAfter);
     $('#npc_state_delta_inject').prop('checked', !!s.inject);
     $('#npc_state_delta_inject_budget').val(s.injectBudgetTokens);
+    $('#npc_state_delta_inject_limit').val(s.injectLimit);
     $('#npc_state_delta_custom_fields').val((s.customFieldNames || []).join(', '));
     syncSuiteControls();
     $('#npc_state_delta_archive_deaths').prop('checked', s.autoArchiveDeaths !== false);
@@ -6972,7 +6975,8 @@ function bindSourceOfTruthSettings() {
 
 function bindSettingsNumber(selector, key, min, max, fallback, after = null) {
     $(document).on('change.npcStateDelta', selector, function () {
-        const value = Math.max(min, Math.min(max, Math.round(Number(this.value) || fallback)));
+        let value = Math.max(min, Math.round(Number(this.value) || fallback));
+        if (max != null) value = Math.min(max, value);
         getSettings()[key] = value;
         this.value = value;
         persistSettings();
@@ -7000,7 +7004,8 @@ function bindUi() {
     bindSettingsCheckbox('#npc_state_delta_narration_capture', 'narrationCapture');
     bindSettingsCheckbox('#npc_state_delta_narration_capture_compact', 'narrationCaptureCompact');
     bindSettingsCheckbox('#npc_state_delta_inject', 'inject', updateInjection);
-    bindSettingsNumber('#npc_state_delta_inject_budget', 'injectBudgetTokens', 512, 6000, 4000, updateInjection);
+    bindSettingsNumber('#npc_state_delta_inject_budget', 'injectBudgetTokens', 512, null, 4000, updateInjection);
+    bindSettingsNumber('#npc_state_delta_inject_limit', 'injectLimit', 1, 100, 3, updateInjection);
     bindSettingsCheckbox('#npc_state_delta_archive_deaths', 'autoArchiveDeaths');
     bindCustomFieldSettings();
     bindSourceOfTruthSettings();
